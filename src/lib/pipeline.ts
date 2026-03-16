@@ -17,7 +17,10 @@ type Diagnostics = {
   messages: string[];
 };
 
-export async function runLeadSearchPipeline(input: KeywordInput): Promise<{
+export async function runLeadSearchPipeline(
+  input: KeywordInput,
+  onProgress?: (stage: string, detail: string) => void
+): Promise<{
   leads: LeadRecord[];
   keywords: string[];
   diagnostics: Diagnostics;
@@ -49,6 +52,7 @@ export async function runLeadSearchPipeline(input: KeywordInput): Promise<{
   };
 
   // Step 3: Search ads for each keyword
+  onProgress?.("searching", "Querying SerpApi for keywords...");
   const location = input.location || undefined;
   const allAds = await Promise.all(
     keywords.map(async (keyword) => {
@@ -65,6 +69,7 @@ export async function runLeadSearchPipeline(input: KeywordInput): Promise<{
 
   const flatAds = allAds.flat();
   diagnostics.adsFound = flatAds.length;
+  onProgress?.("searching", "Found " + flatAds.length + " businesses across " + keywords.length + " keywords");
 
   // Step 4: Normalize URLs, extract domains, deduplicate by domain
   type QueueEntry = { url: string; domain: string; keyword: string };
@@ -97,7 +102,11 @@ export async function runLeadSearchPipeline(input: KeywordInput): Promise<{
   }
 
   // Step 5: PageSpeed analysis
-  const pageSpeedMap = await analyzeUrlsWithRateLimit(queue, input.maxDomains);
+  const total = Math.min(queue.length, input.maxDomains ?? 20);
+  onProgress?.("analyzing", "Running PageSpeed analysis on " + total + " domains...");
+  const pageSpeedMap = await analyzeUrlsWithRateLimit(queue, input.maxDomains ?? 20, 3, (completed, tot) => {
+    onProgress?.("analyzing", completed + " of " + tot + " domains analyzed");
+  });
   diagnostics.pageSpeedResults = pageSpeedMap.size;
   diagnostics.pageSpeedFailures = Math.min(queue.length, input.maxDomains) - pageSpeedMap.size;
 
@@ -122,11 +131,13 @@ export async function runLeadSearchPipeline(input: KeywordInput): Promise<{
   diagnostics.slowSites = leads.length;
 
   // Step 7: Send email report
+  onProgress?.("emailing", "Sending report email...");
   const emailResult = await sendReport(leads, keywords, input.email);
   diagnostics.emailSent = emailResult.success;
   if (!emailResult.success) {
     diagnostics.messages.push(`Email failed: ${emailResult.error ?? "unknown error"}`);
   }
 
+  onProgress?.("complete", "Done — " + leads.length + " leads found");
   return { leads, keywords, diagnostics };
 }

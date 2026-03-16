@@ -5,6 +5,7 @@ import { runLeadSearchPipeline } from "./lib/pipeline.js";
 import { getEnv } from "./lib/env.js";
 import { DEFAULT_KEYWORDS } from "./config/keywords.js";
 import { DEFAULT_THRESHOLDS } from "./config/thresholds.js";
+import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
 
 const allowedOrigins = (process.env["ALLOWED_ORIGINS"] ?? "http://localhost:3000")
   .split(",")
@@ -19,34 +20,52 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-app.post("/api/run-lead-search", async (req, res) => {
+app.post("/api/run-lead-search", (req, res) => {
   const parsed = KeywordInputSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ success: false, error: parsed.error.issues });
     return;
   }
 
-  const start = Date.now();
-  console.log("[Server] POST /api/run-lead-search started");
+  const job = createJob();
+  updateJob(job.id, { status: "running", progress: { stage: "starting", detail: "Initializing pipeline..." } });
+  console.log(`[Server] POST /api/run-lead-search — job ${job.id} started`);
 
-  try {
-    const { leads, keywords, diagnostics } = await runLeadSearchPipeline(parsed.data);
-    const elapsedSeconds = ((Date.now() - start) / 1000).toFixed(2);
-    console.log(`[Server] Pipeline complete — ${leads.length} leads, ${elapsedSeconds}s`);
-
-    res.json({
-      success: true,
-      leadsFound: leads.length,
-      leads,
-      keywords,
-      diagnostics,
-      elapsedSeconds: Number(elapsedSeconds),
+  // Fire and forget — do not await
+  runLeadSearchPipeline(parsed.data, (stage, detail) => {
+    updateJob(job.id, { progress: { stage, detail } });
+  })
+    .then(({ leads, keywords, diagnostics }) => {
+      updateJob(job.id, {
+        status: "complete",
+        completedAt: Date.now(),
+        leads,
+        keywords,
+        diagnostics: diagnostics as Record<string, unknown>,
+        progress: { stage: "complete", detail: "Done — " + leads.length + " leads found" },
+      });
+      console.log(`[Server] Job ${job.id} complete — ${leads.length} leads`);
+    })
+    .catch((err) => {
+      updateJob(job.id, {
+        status: "failed",
+        completedAt: Date.now(),
+        error: err instanceof Error ? err.message : String(err),
+        progress: { stage: "failed", detail: "Pipeline failed" },
+      });
+      console.error(`[Server] Job ${job.id} failed:`, err);
     });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[Server] /api/run-lead-search error:", err);
-    res.status(500).json({ success: false, error: message });
+
+  res.status(202).json({ success: true, jobId: job.id });
+});
+
+app.get("/api/jobs/:id", (req, res) => {
+  const job = getJob(req.params["id"] ?? "");
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
   }
+  res.json(job);
 });
 
 app.get("/api/cron", async (req, res) => {
@@ -77,6 +96,8 @@ app.get("/api/cron", async (req, res) => {
     res.status(500).json({ success: false, error: message });
   }
 });
+
+setInterval(cleanOldJobs, 10 * 60 * 1000); // Clean up every 10 minutes
 
 const port = process.env["PORT"] ?? 3001;
 app.listen(port, () => {

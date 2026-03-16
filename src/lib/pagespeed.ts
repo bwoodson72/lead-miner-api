@@ -85,14 +85,19 @@ async function runWithConcurrency<T>(
 export async function analyzeUrlsWithRateLimit(
   urls: { url: string; domain: string; keyword: string }[],
   maxDomains = 20,
-  concurrency = 3
+  concurrency = 3,
+  onResult?: (completedCount: number, totalCount: number) => void
 ): Promise<Map<string, PageSpeedResult>> {
   const sliced = urls.slice(0, maxDomains);
+  const total = sliced.length;
+  let completed = 0;
 
   console.log(`[PageSpeed] Analyzing ${sliced.length} of ${urls.length} URLs (concurrency=${concurrency})`);
 
   const tasks = sliced.map(({ url, domain }) => async () => {
     const result = await analyzeUrl(url);
+    completed++;
+    onResult?.(completed, total);
     return result ? { domain, result } : null;
   });
 
