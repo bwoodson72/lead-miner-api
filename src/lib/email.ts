@@ -53,7 +53,7 @@ export async function sendReport(
     console.log("[Email] Sending report to:", recipientEmail, "with", leads.length, "leads");
 
     const { error } = await resend.emails.send({
-      from: "Lead Miner <onboarding@resend.dev>",
+      from: "Lead Miner <leads@brianwoodson.dev>",
       to: recipientEmail,
       subject: "Lead Report: Slow Ad Landing Pages",
       text: formatReport(leads, keywords),
