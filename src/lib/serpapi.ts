@@ -13,6 +13,11 @@ function buildSerpAd(
       ? link
       : `https://${link}`;
 
+  if (fullLink.includes("google.com/localservices") || fullLink.includes("google.com/maps")) {
+    console.log("[SerpApi] Skipping Google URL:", fullLink.slice(0, 100));
+    return null;
+  }
+
   const source = displayedLink ?? fullLink;
   const displayDomain = source
     .replace(/^https?:\/\//, "")
@@ -79,6 +84,10 @@ async function queryGoogleSearch(
   for (const ad of localAdsArr) {
     const link = (ad["link"] ?? ad["website"]) as string | undefined;
     if (!link) continue;
+    if (link.startsWith("https://www.google.com/")) {
+      console.log("[SerpApi] Skipping local service ad with Google redirect URL for:", ad["title"] || "unknown");
+      continue;
+    }
     const entry = buildSerpAd(keyword, ad["title"] as string | undefined, link);
     if (entry) { results.push(entry); countB++; }
   }

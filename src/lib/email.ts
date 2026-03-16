@@ -50,6 +50,8 @@ export async function sendReport(
     const { env } = await import("./env.js");
     const resend = new Resend(env.RESEND_API_KEY);
 
+    console.log("[Email] Sending report to:", recipientEmail, "with", leads.length, "leads");
+
     const { error } = await resend.emails.send({
       from: "Lead Miner <onboarding@resend.dev>",
       to: recipientEmail,
@@ -58,12 +60,15 @@ export async function sendReport(
     });
 
     if (error) {
+      console.error("[Email] Resend error:", error.message);
       return { success: false, error: error.message };
     }
 
+    console.log("[Email] Report sent successfully to:", recipientEmail);
     return { success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error("[Email] Send failed:", message);
     return { success: false, error: message };
   }
 }
