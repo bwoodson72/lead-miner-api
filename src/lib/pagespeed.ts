@@ -26,26 +26,24 @@ export async function analyzeUrl(url: string): Promise<PageSpeedResult | null> {
 
   try {
     const response = await fetch(fetchUrl, { signal: controller.signal });
-    const data = (await response.json()) as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as any;
 
     if (!data["lighthouseResult"]) {
       console.log(`[PageSpeed] No lighthouseResult for ${url}`);
       return null;
     }
 
-    const lr = data["lighthouseResult"] as Record<string, unknown>;
-    const categories = lr["categories"] as Record<string, unknown>;
-    const audits = lr["audits"] as Record<string, unknown>;
+    const lcp = data.lighthouseResult?.audits?.["largest-contentful-paint"]?.numericValue ?? 0;
+    const cls = data.lighthouseResult?.audits?.["cumulative-layout-shift"]?.numericValue ?? 0;
+    const tbt = data.lighthouseResult?.audits?.["total-blocking-time"]?.numericValue ?? 0;
+    const scoreRaw = data.lighthouseResult?.categories?.performance?.score;
+    const performanceScore = typeof scoreRaw === "number" ? Math.round(scoreRaw * 100) : 0;
 
-    const perf = categories["performance"] as Record<string, unknown>;
-    const lcpAudit = audits["largest-contentful-paint"] as Record<string, unknown>;
-    const clsAudit = audits["cumulative-layout-shift"] as Record<string, unknown>;
-    const tbtAudit = audits["total-blocking-time"] as Record<string, unknown>;
-
-    const performanceScore = Math.round((perf["score"] as number) * 100);
-    const lcp = lcpAudit["numericValue"] as number;
-    const cls = clsAudit["numericValue"] as number;
-    const tbt = tbtAudit["numericValue"] as number;
+    if (performanceScore === 0 && lcp === 0) {
+      console.warn("[PageSpeed] Lighthouse likely failed for:", url, "— skipping");
+      return null;
+    }
 
     const elapsed = Date.now() - start;
     console.log(`[PageSpeed] Completed ${url} — score=${performanceScore}, elapsed=${elapsed}ms`);
