@@ -58,9 +58,14 @@ async function findContactByDomain(
     }),
   });
 
-  const data = (await response.json()) as { total: number; results: { id: string }[] };
-  if (data.total > 0 && data.results[0]) {
-    return data.results[0].id;
+  const data = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) {
+    console.error(`[HubSpot] findContactByDomain FAILED (${response.status}) for ${domain}:`, JSON.stringify(data).slice(0, 500));
+    return null;
+  }
+  const results = data as { total: number; results: { id: string }[] };
+  if (results.total > 0 && results.results[0]) {
+    return results.results[0].id;
   }
   return null;
 }
@@ -83,16 +88,21 @@ async function createContact(lead: LeadRecord): Promise<string> {
     }),
   });
 
-  const data = (await response.json()) as { id: string };
-  console.log(`[HubSpot] Created contact ${data.id} for ${lead.domain}`);
-  return data.id;
+  const data = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) {
+    console.error(`[HubSpot] createContact FAILED (${response.status}) for ${lead.domain}:`, JSON.stringify(data).slice(0, 500));
+    throw new Error(`HubSpot createContact failed: ${response.status}`);
+  }
+  const contactId = data.id as string;
+  console.log(`[HubSpot] Created contact ${contactId} for ${lead.domain}`);
+  return contactId;
 }
 
 async function updateContact(
   contactId: string,
   lead: LeadRecord
 ): Promise<void> {
-  await hubspotFetch(`/crm/v3/objects/contacts/${contactId}`, {
+  const response = await hubspotFetch(`/crm/v3/objects/contacts/${contactId}`, {
     method: "PATCH",
     body: JSON.stringify({
       properties: {
@@ -102,6 +112,10 @@ async function updateContact(
       },
     }),
   });
+  const data = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) {
+    console.error(`[HubSpot] updateContact FAILED (${response.status}) for ${lead.domain}:`, JSON.stringify(data).slice(0, 500));
+  }
   console.log(`[HubSpot] Updated contact ${contactId} for ${lead.domain}`);
 }
 
@@ -137,9 +151,14 @@ async function createDeal(
     }),
   });
 
-  const data = (await response.json()) as { id: string };
-  console.log(`[HubSpot] Created deal ${data.id} for ${lead.domain}`);
-  return data.id;
+  const data = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) {
+    console.error(`[HubSpot] createDeal FAILED (${response.status}) for ${lead.domain}:`, JSON.stringify(data).slice(0, 500));
+    throw new Error(`HubSpot createDeal failed: ${response.status}`);
+  }
+  const dealId = data.id as string;
+  console.log(`[HubSpot] Created deal ${dealId} for ${lead.domain}`);
+  return dealId;
 }
 
 // ── PUBLIC: PUSH LEAD TO HUBSPOT ────────────────────────────
