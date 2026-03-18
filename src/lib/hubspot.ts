@@ -163,28 +163,18 @@ async function findContact(lead: LeadRecord): Promise<string | null> {
 async function createContact(lead: LeadRecord): Promise<string> {
   const properties: Record<string, string> = {
     website: lead.domain,
-    company: lead.domain,
+    company: lead.businessName || lead.domain,
     lighthouse_score: String(lead.performanceScore),
     lcp: String(Math.round(lead.lcp)),
-    leadkeyword: lead.keyword,  // Updated to match HubSpot internal name (no underscore)
+    leadkeyword: lead.keyword,
     landing_page_url: lead.landingPageUrl,
     lifecyclestage: "lead",
   };
 
-  // Add optional enrichment and PSI fields when present
-  if (lead.cls !== undefined) properties.cls = String(lead.cls);
-  if (lead.tbt !== undefined) properties.tbt = String(Math.round(lead.tbt));
-  if (lead.adSource) properties.ad_source = lead.adSource;
-  if (lead.pagespeedTestedAt) properties.pagespeed_tested_at = lead.pagespeedTestedAt;
-  if (lead.pagespeedStrategy) properties.pagespeed_strategy = lead.pagespeedStrategy;
-  if (lead.pagespeedReportUrl) properties.pagespeed_report_url = lead.pagespeedReportUrl;
-  if (lead.businessName) properties.business_name = lead.businessName;
-  if (lead.contactPageUrl) properties.contact_page_url = lead.contactPageUrl;
+  // Use HubSpot built-in fields for enriched contact info
   if (lead.phone) properties.phone = lead.phone;
   if (lead.email) properties.email = lead.email;
   if (lead.address) properties.address = lead.address;
-  if (lead.sourceTitle) properties.source_title = lead.sourceTitle;
-  if (lead.enrichmentStatus) properties.enrichment_status = lead.enrichmentStatus;
 
   const response = await hubspotFetch("/crm/v3/objects/contacts", {
     method: "POST",
@@ -211,20 +201,11 @@ async function updateContact(
     landing_page_url: lead.landingPageUrl,
   };
 
-  // Add optional enrichment and PSI fields when present
-  if (lead.cls !== undefined) properties.cls = String(lead.cls);
-  if (lead.tbt !== undefined) properties.tbt = String(Math.round(lead.tbt));
-  if (lead.adSource) properties.ad_source = lead.adSource;
-  if (lead.pagespeedTestedAt) properties.pagespeed_tested_at = lead.pagespeedTestedAt;
-  if (lead.pagespeedStrategy) properties.pagespeed_strategy = lead.pagespeedStrategy;
-  if (lead.pagespeedReportUrl) properties.pagespeed_report_url = lead.pagespeedReportUrl;
-  if (lead.businessName) properties.business_name = lead.businessName;
-  if (lead.contactPageUrl) properties.contact_page_url = lead.contactPageUrl;
+  // Update built-in fields if enrichment found new data
   if (lead.phone) properties.phone = lead.phone;
   if (lead.email) properties.email = lead.email;
   if (lead.address) properties.address = lead.address;
-  if (lead.sourceTitle) properties.source_title = lead.sourceTitle;
-  if (lead.enrichmentStatus) properties.enrichment_status = lead.enrichmentStatus;
+  if (lead.businessName) properties.company = lead.businessName;
 
   const response = await hubspotFetch(`/crm/v3/objects/contacts/${contactId}`, {
     method: "PATCH",
@@ -233,6 +214,7 @@ async function updateContact(
   const data = (await response.json()) as Record<string, unknown>;
   if (!response.ok) {
     console.error(`[HubSpot] updateContact FAILED (${response.status}) for ${lead.domain}:`, JSON.stringify(data).slice(0, 500));
+    return;
   }
   console.log(`[HubSpot] Updated contact ${contactId} for ${lead.domain}`);
 }
