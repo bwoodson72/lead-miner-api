@@ -4,6 +4,9 @@ export type PageSpeedResult = {
   cls: number;
   tbt: number;
   url: string;
+  strategy: "mobile";
+  testedAt: string;
+  reportUrl?: string;
 };
 
 export async function analyzeUrl(url: string): Promise<PageSpeedResult | null> {
@@ -48,7 +51,19 @@ export async function analyzeUrl(url: string): Promise<PageSpeedResult | null> {
     const elapsed = Date.now() - start;
     console.log(`[PageSpeed] Completed ${url} — score=${performanceScore}, elapsed=${elapsed}ms`);
 
-    return { performanceScore, lcp, cls, tbt, url };
+    const testedAt = new Date().toISOString();
+    const reportUrl = data.id as string | undefined;
+
+    return {
+      performanceScore,
+      lcp,
+      cls,
+      tbt,
+      url,
+      strategy: "mobile",
+      testedAt,
+      ...(reportUrl && { reportUrl })
+    };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       console.log(`[PageSpeed] Timeout (45s) for ${url}`);

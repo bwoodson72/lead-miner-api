@@ -19,6 +19,11 @@ export const SerpAdSchema = z.object({
   landingPageUrl: z.string().url(),
   displayDomain: z.string(),
   adSource: z.enum(["paid_ad", "local_organic"]),
+  // Business metadata from search results (optional)
+  businessName: z.string().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  sourceTitle: z.string().optional(),
 });
 
 export type SerpAd = z.infer<typeof SerpAdSchema>;
@@ -33,6 +38,19 @@ export const LeadRecordSchema = z.object({
   tbt: z.number(),
   adSource: z.enum(["paid_ad", "local_organic"]),
   timestamp: z.string(),
+  // PageSpeed metadata (optional)
+  pagespeedStrategy: z.enum(["mobile", "desktop"]).optional(),
+  pagespeedTestedAt: z.string().optional(),
+  pagespeedReportUrl: z.string().url().optional(),
+  sourceTitle: z.string().optional(),
+  // Lead enrichment fields (optional)
+  businessName: z.string().optional(),
+  contactPageUrl: z.string().url().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  enrichmentStatus: z.enum(["pending", "enriched", "failed", "skipped"]).optional(),
+  enrichmentNotes: z.string().optional(),
 });
 
 export type LeadRecord = z.infer<typeof LeadRecordSchema>;

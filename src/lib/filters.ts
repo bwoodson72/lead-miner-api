@@ -1,5 +1,5 @@
 import { type PageSpeedResult } from "./pagespeed.js";
-import { LeadRecordSchema, type LeadRecord } from "./schemas.js";
+import { LeadRecordSchema, type LeadRecord, type SerpAd } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 
 export function isSlowSite(result: PageSpeedResult, thresholds: Thresholds): boolean {
@@ -17,8 +17,9 @@ export function buildLeadRecord(params: {
   landingPageUrl: string;
   pageSpeed: PageSpeedResult;
   adSource: "paid_ad" | "local_organic";
+  serpAd?: SerpAd;
 }): LeadRecord {
-  const { keyword, domain, landingPageUrl, pageSpeed, adSource } = params;
+  const { keyword, domain, landingPageUrl, pageSpeed, adSource, serpAd } = params;
   const timestamp = new Date().toISOString().slice(0, 10);
 
   return LeadRecordSchema.parse({
@@ -31,5 +32,14 @@ export function buildLeadRecord(params: {
     tbt: pageSpeed.tbt,
     adSource,
     timestamp,
+    // PageSpeed metadata
+    pagespeedStrategy: pageSpeed.strategy,
+    pagespeedTestedAt: pageSpeed.testedAt,
+    ...(pageSpeed.reportUrl && { pagespeedReportUrl: pageSpeed.reportUrl }),
+    // SerpAd source metadata
+    ...(serpAd?.sourceTitle && { sourceTitle: serpAd.sourceTitle }),
+    ...(serpAd?.businessName && { businessName: serpAd.businessName }),
+    ...(serpAd?.phone && { phone: serpAd.phone }),
+    ...(serpAd?.address && { address: serpAd.address }),
   });
 }
