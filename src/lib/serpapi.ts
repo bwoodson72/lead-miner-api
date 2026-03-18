@@ -2,6 +2,7 @@ import { SerpAdSchema, type SerpAd } from "./schemas.js";
 
 function buildSerpAd(
   keyword: string,
+  adSource: "paid_ad" | "local_organic",
   title?: string,
   link?: string,
   displayedLink?: string
@@ -29,6 +30,7 @@ function buildSerpAd(
     adTitle: title ?? "",
     landingPageUrl: fullLink,
     displayDomain,
+    adSource,
   });
 
   if (!result.success) {
@@ -67,6 +69,7 @@ async function queryGoogleSearch(
   for (const ad of ads) {
     const entry = buildSerpAd(
       keyword,
+      "paid_ad",
       ad["title"] as string | undefined,
       ad["link"] as string | undefined,
       ad["displayed_link"] as string | undefined
@@ -88,7 +91,7 @@ async function queryGoogleSearch(
       console.log("[SerpApi] Skipping local service ad with Google redirect URL for:", ad["title"] || "unknown");
       continue;
     }
-    const entry = buildSerpAd(keyword, ad["title"] as string | undefined, link);
+    const entry = buildSerpAd(keyword, "paid_ad", ad["title"] as string | undefined, link);
     if (entry) { results.push(entry); countB++; }
   }
   console.log(`[SerpApi] queryGoogleSearch Source B (local service ads): ${countB} results`);
@@ -108,7 +111,7 @@ async function queryGoogleSearch(
     const links = result["links"] as Record<string, unknown> | undefined;
     const website = links?.["website"] as string | undefined;
     if (!website) continue;
-    const entry = buildSerpAd(keyword, result["title"] as string | undefined, website);
+    const entry = buildSerpAd(keyword, "local_organic", result["title"] as string | undefined, website);
     if (entry) { results.push(entry); countC++; }
   }
   console.log(`[SerpApi] queryGoogleSearch Source C (local 3-pack): ${countC} results`);
@@ -147,7 +150,7 @@ async function queryGoogleLocal(
     const links = result["links"] as Record<string, unknown> | undefined;
     const website = links?.["website"] as string | undefined;
     if (!website) continue;
-    const entry = buildSerpAd(keyword, result["title"] as string | undefined, website);
+    const entry = buildSerpAd(keyword, "local_organic", result["title"] as string | undefined, website);
     if (entry) { results.push(entry); countLocal++; }
   }
   console.log(`[SerpApi] queryGoogleLocal local_results with website: ${countLocal}`);
@@ -163,7 +166,7 @@ async function queryGoogleLocal(
       (links?.["website"] as string | undefined) ??
       (ad["displayed_link"] as string | undefined);
     if (!website) continue;
-    const entry = buildSerpAd(keyword, ad["title"] as string | undefined, website);
+    const entry = buildSerpAd(keyword, "paid_ad", ad["title"] as string | undefined, website);
     if (entry) { results.push(entry); countAds++; }
   }
   console.log(`[SerpApi] queryGoogleLocal ads_results with website: ${countAds}`);

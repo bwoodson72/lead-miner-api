@@ -8,6 +8,7 @@ const envSchema = z.object({
   PAGESPEED_API_KEY: z.string().min(1),
   RESEND_API_KEY: z.string().min(1),
   REPORT_EMAIL: z.string().email(),
+  HUBSPOT_ACCESS_TOKEN: z.string().min(1),
   CRON_SECRET: z.string().min(1).optional(),
   ALLOWED_ORIGINS: z.string().optional().default("http://localhost:3000"),
 });

@@ -2,40 +2,32 @@ import { Resend } from "resend";
 import { type LeadRecord } from "./schemas.js";
 
 export function formatReport(leads: LeadRecord[], keywords: string[]): string {
-  if (leads.length === 0) {
-    return "No slow landing pages found for the searched keywords.";
-  }
-
   const date = new Date().toISOString().slice(0, 10);
-  const keywordList = keywords.join(", ");
+  const keywordCount = keywords.length;
+  const leadCount = leads.length;
 
   const lines: string[] = [
-    `Lead Report — ${date}`,
-    `Keywords: ${keywordList}`,
+    `Lead Miner Run — ${date}`,
+    "",
+    `Keywords searched: ${keywordCount}`,
+    `Leads found: ${leadCount}`,
     "",
   ];
 
-  const byKeyword = new Map<string, LeadRecord[]>();
-  for (const lead of leads) {
-    const group = byKeyword.get(lead.keyword) ?? [];
-    group.push(lead);
-    byKeyword.set(lead.keyword, group);
-  }
+  if (leadCount === 0) {
+    lines.push("No slow sites found for the searched keywords.");
+  } else {
+    lines.push("Leads pushed to HubSpot. Summary:");
+    lines.push("");
 
-  for (const [keyword, group] of byKeyword) {
-    lines.push(`--- ${keyword} ---`);
-    for (const lead of group) {
+    for (const lead of leads) {
       const lcp = (lead.lcp / 1000).toFixed(1);
-      const cls = lead.cls.toFixed(2);
-      const tbt = Math.round(lead.tbt);
-      lines.push(`  Domain:  ${lead.domain}`);
-      lines.push(`  URL:     ${lead.landingPageUrl}`);
-      lines.push(`  Score:   ${lead.performanceScore}`);
-      lines.push(`  LCP:     ${lcp}s`);
-      lines.push(`  CLS:     ${cls}`);
-      lines.push(`  TBT:     ${tbt}ms`);
-      lines.push("");
+      const source = lead.adSource === "paid_ad" ? "Ad" : "Organic";
+      lines.push(`  ${lead.domain} — Score: ${lead.performanceScore}, LCP: ${lcp}s [${source}]`);
     }
+
+    lines.push("");
+    lines.push("Review and start outreach in HubSpot.");
   }
 
   return lines.join("\n");
@@ -55,7 +47,7 @@ export async function sendReport(
     const { error } = await resend.emails.send({
       from: "Lead Miner <leads@brianwoodson.dev>",
       to: recipientEmail,
-      subject: "Lead Report: Slow Ad Landing Pages",
+      subject: `Lead Miner: ${leads.length} leads found — ${new Date().toISOString().slice(0, 10)}`,
       text: formatReport(leads, keywords),
     });
 

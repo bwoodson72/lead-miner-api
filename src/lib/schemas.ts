@@ -8,7 +8,7 @@ export const KeywordInputSchema = z.object({
   tbt: z.number().default(300),
   email: z.string().email(),
   location: z.string().optional().default(""),
-  maxDomains: z.number().min(1).max(50).default(20),
+  maxDomains: z.number().min(1).max(200).default(100),
 });
 
 export type KeywordInput = z.infer<typeof KeywordInputSchema>;
@@ -18,6 +18,7 @@ export const SerpAdSchema = z.object({
   adTitle: z.string(),
   landingPageUrl: z.string().url(),
   displayDomain: z.string(),
+  adSource: z.enum(["paid_ad", "local_organic"]),
 });
 
 export type SerpAd = z.infer<typeof SerpAdSchema>;
@@ -30,6 +31,7 @@ export const LeadRecordSchema = z.object({
   lcp: z.number(),
   cls: z.number(),
   tbt: z.number(),
+  adSource: z.enum(["paid_ad", "local_organic"]),
   timestamp: z.string(),
 });
 

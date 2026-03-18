@@ -16,8 +16,9 @@ export function buildLeadRecord(params: {
   domain: string;
   landingPageUrl: string;
   pageSpeed: PageSpeedResult;
+  adSource: "paid_ad" | "local_organic";
 }): LeadRecord {
-  const { keyword, domain, landingPageUrl, pageSpeed } = params;
+  const { keyword, domain, landingPageUrl, pageSpeed, adSource } = params;
   const timestamp = new Date().toISOString().slice(0, 10);
 
   return LeadRecordSchema.parse({
@@ -28,6 +29,7 @@ export function buildLeadRecord(params: {
     lcp: pageSpeed.lcp,
     cls: pageSpeed.cls,
     tbt: pageSpeed.tbt,
+    adSource,
     timestamp,
   });
 }

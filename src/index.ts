@@ -83,7 +83,6 @@ app.get("/api/cron", async (req, res) => {
     const input = KeywordInputSchema.parse({
       keywords: DEFAULT_KEYWORDS.join("\n"),
       ...DEFAULT_THRESHOLDS,
-      maxDomains: 20,
       email: env.REPORT_EMAIL,
     });
 

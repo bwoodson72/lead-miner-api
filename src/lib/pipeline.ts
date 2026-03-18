@@ -5,14 +5,20 @@ import { isSlowSite, buildLeadRecord } from "./filters.js";
 import { sendReport } from "./email.js";
 import { type KeywordInput, type LeadRecord } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
+import { isFranchise } from "./franchise-filter.js";
+import { pushLeadsToHubSpot, type HubSpotResult } from "./hubspot.js";
 
 type Diagnostics = {
   keywordsParsed: number;
   adsFound: number;
   uniqueDomains: number;
+  franchisesFiltered: number;
   pageSpeedResults: number;
   pageSpeedFailures: number;
   slowSites: number;
+  hubspotCreated: number;
+  hubspotUpdated: number;
+  hubspotFailed: number;
   emailSent: boolean;
   messages: string[];
 };
@@ -29,9 +35,13 @@ export async function runLeadSearchPipeline(
     keywordsParsed: 0,
     adsFound: 0,
     uniqueDomains: 0,
+    franchisesFiltered: 0,
     pageSpeedResults: 0,
     pageSpeedFailures: 0,
     slowSites: 0,
+    hubspotCreated: 0,
+    hubspotUpdated: 0,
+    hubspotFailed: 0,
     emailSent: false,
     messages: [],
   };
@@ -72,7 +82,7 @@ export async function runLeadSearchPipeline(
   onProgress?.("searching", "Found " + flatAds.length + " businesses across " + keywords.length + " keywords");
 
   // Step 4: Normalize URLs, extract domains, deduplicate by domain
-  type QueueEntry = { url: string; domain: string; keyword: string };
+  type QueueEntry = { url: string; domain: string; keyword: string; adSource: "paid_ad" | "local_organic" };
   const seenDomains = new Set<string>();
   const queue: QueueEntry[] = [];
 
@@ -89,31 +99,41 @@ export async function runLeadSearchPipeline(
 
     if (!seenDomains.has(domain)) {
       seenDomains.add(domain);
-      queue.push({ url: normalizedUrl, domain, keyword: ad.keyword });
+      queue.push({ url: normalizedUrl, domain, keyword: ad.keyword, adSource: ad.adSource });
     }
   }
 
   diagnostics.uniqueDomains = queue.length;
 
-  if (queue.length > input.maxDomains) {
+  // Step 4b: Filter out franchise domains
+  const filteredQueue = queue.filter((entry) => {
+    if (isFranchise(entry.domain)) {
+      diagnostics.franchisesFiltered++;
+      diagnostics.messages.push(`Filtered franchise: ${entry.domain}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (filteredQueue.length > input.maxDomains) {
     diagnostics.messages.push(
-      `Capping analysis to ${input.maxDomains} domains (${queue.length} unique found)`
+      `Capping analysis to ${input.maxDomains} domains (${filteredQueue.length} unique found)`
     );
   }
 
   // Step 5: PageSpeed analysis
-  const total = Math.min(queue.length, input.maxDomains ?? 20);
+  const total = Math.min(filteredQueue.length, input.maxDomains ?? 20);
   onProgress?.("analyzing", "Running PageSpeed analysis on " + total + " domains...");
-  const pageSpeedMap = await analyzeUrlsWithRateLimit(queue, input.maxDomains ?? 20, 3, (completed, tot) => {
+  const pageSpeedMap = await analyzeUrlsWithRateLimit(filteredQueue, input.maxDomains ?? 20, 3, (completed, tot) => {
     onProgress?.("analyzing", completed + " of " + tot + " domains analyzed");
   });
   diagnostics.pageSpeedResults = pageSpeedMap.size;
-  diagnostics.pageSpeedFailures = Math.min(queue.length, input.maxDomains) - pageSpeedMap.size;
+  diagnostics.pageSpeedFailures = Math.min(filteredQueue.length, input.maxDomains) - pageSpeedMap.size;
 
   // Step 6: Filter slow sites and build lead records
   const leads: LeadRecord[] = [];
 
-  for (const entry of queue.slice(0, input.maxDomains)) {
+  for (const entry of filteredQueue.slice(0, input.maxDomains)) {
     const result = pageSpeedMap.get(entry.domain);
     if (!result) continue;
 
@@ -123,6 +143,7 @@ export async function runLeadSearchPipeline(
         domain: entry.domain,
         landingPageUrl: entry.url,
         pageSpeed: result,
+        adSource: entry.adSource,
       });
       leads.push(lead);
     }
@@ -130,7 +151,19 @@ export async function runLeadSearchPipeline(
 
   diagnostics.slowSites = leads.length;
 
-  // Step 7: Send email report
+  // Step 7: Push to HubSpot
+  onProgress?.("hubspot", "Pushing " + leads.length + " leads to HubSpot...");
+  const hubspotResults = await pushLeadsToHubSpot(leads);
+  for (const r of hubspotResults) {
+    if (r.action === "created") diagnostics.hubspotCreated++;
+    else if (r.action === "updated") diagnostics.hubspotUpdated++;
+    else diagnostics.hubspotFailed++;
+  }
+  diagnostics.messages.push(
+    `HubSpot: ${diagnostics.hubspotCreated} created, ${diagnostics.hubspotUpdated} updated, ${diagnostics.hubspotFailed} failed`
+  );
+
+  // Step 8: Send email report
   onProgress?.("emailing", "Sending report email...");
   const emailResult = await sendReport(leads, keywords, input.email);
   diagnostics.emailSent = emailResult.success;
