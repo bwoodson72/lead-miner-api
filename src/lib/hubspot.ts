@@ -81,7 +81,7 @@ async function createContact(lead: LeadRecord): Promise<string> {
         company: lead.domain,
         lighthouse_score: String(lead.performanceScore),
         lcp: String(Math.round(lead.lcp)),
-        lead_keyword: lead.keyword,
+        leadkeyword: lead.keyword,  // Updated to match HubSpot internal name (no underscore)
         landing_page_url: lead.landingPageUrl,
         lifecyclestage: "lead",
       },
