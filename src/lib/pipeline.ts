@@ -6,7 +6,7 @@ import { sendReport } from "./email.js";
 import { type KeywordInput, type LeadRecord } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 import { isFranchise } from "./franchise-filter.js";
-import { pushLeadsToHubSpot } from "./hubspot.js";
+import { upsertLeads } from "./db.js";
 import { enrichLeadFromSite } from "./enrichment.js";
 
 type Diagnostics = {
@@ -21,9 +21,9 @@ type Diagnostics = {
   enrichmentFailures: number;
   emailsFound: number;
   phonesFound: number;
-  hubspotCreated: number;
-  hubspotUpdated: number;
-  hubspotFailed: number;
+  dbCreated: number;
+  dbUpdated: number;
+  dbFailed: number;
   emailSent: boolean;
   messages: string[];
 };
@@ -48,9 +48,9 @@ export async function runLeadSearchPipeline(
     enrichmentFailures: 0,
     emailsFound: 0,
     phonesFound: 0,
-    hubspotCreated: 0,
-    hubspotUpdated: 0,
-    hubspotFailed: 0,
+    dbCreated: 0,
+    dbUpdated: 0,
+    dbFailed: 0,
     emailSent: false,
     messages: [],
   };
@@ -207,16 +207,16 @@ export async function runLeadSearchPipeline(
     `Enrichment: ${diagnostics.leadsEnriched} enriched, ${diagnostics.enrichmentFailures} failed, ${diagnostics.emailsFound} emails, ${diagnostics.phonesFound} phones`
   );
 
-  // Step 7: Push to HubSpot
-  onProgress?.("hubspot", "Pushing " + leads.length + " leads to HubSpot...");
-  const hubspotResults = await pushLeadsToHubSpot(leads);
-  for (const r of hubspotResults) {
-    if (r.action === "created") diagnostics.hubspotCreated++;
-    else if (r.action === "updated") diagnostics.hubspotUpdated++;
-    else diagnostics.hubspotFailed++;
+  // Step 7: Save to database
+  onProgress?.("saving", "Saving " + leads.length + " leads to database...");
+  const dbResults = await upsertLeads(leads);
+  for (const r of dbResults) {
+    if (r.action === "created") diagnostics.dbCreated++;
+    else if (r.action === "updated") diagnostics.dbUpdated++;
+    else diagnostics.dbFailed++;
   }
   diagnostics.messages.push(
-    `HubSpot: ${diagnostics.hubspotCreated} created, ${diagnostics.hubspotUpdated} updated, ${diagnostics.hubspotFailed} failed`
+    `Database: ${diagnostics.dbCreated} created, ${diagnostics.dbUpdated} updated, ${diagnostics.dbFailed} failed`
   );
 
   // Step 8: Send email report

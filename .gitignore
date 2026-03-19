@@ -31,3 +31,5 @@ logs
 # TypeScript
 tsconfig.tsbuildinfo
 /repomix-output.txt
+
+/src/generated/prisma

@@ -1,0 +1,42 @@
+generator client {
+  provider  = "prisma-client"
+  output    = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Lead {
+  id               Int       @id @default(autoincrement())
+  domain           String    @unique
+  businessName     String?   @map("business_name")
+  landingPageUrl   String    @map("landing_page_url")
+  keyword          String
+  adSource         String    @default("local_organic") @map("ad_source")
+
+  lighthouseScore  Int       @map("lighthouse_score")
+  lcp              Int
+  cls              Float?
+  tbt              Int?
+
+  email            String?
+  phone            String?
+  address          String?
+  contactPageUrl   String?   @map("contact_page_url")
+  enrichmentStatus String?   @map("enrichment_status")
+  enrichmentNotes  String?   @map("enrichment_notes")
+
+  status           String    @default("new")
+  outreachCount    Int       @default(0) @map("outreach_count")
+  lastOutreachDate DateTime? @map("last_outreach_date")
+
+  notes            Json      @default("[]")
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([lighthouseScore])
+  @@map("leads")
+}
