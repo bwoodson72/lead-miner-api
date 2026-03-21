@@ -1,3 +1,6 @@
+import { detectAgency } from "./agency-filter.js";
+import { detectNationalChain } from "./chain-filter.js";
+
 export type EnrichmentResult = {
   businessName?: string;
   contactPageUrl?: string;
@@ -6,6 +9,10 @@ export type EnrichmentResult = {
   address?: string;
   enrichmentStatus: "enriched" | "failed" | "skipped";
   enrichmentNotes: string;
+  isAgencyManaged?: boolean;
+  agencyName?: string;
+  isNationalChain?: boolean;
+  chainReason?: string;
 };
 
 export type EnrichmentInput = {
@@ -111,8 +118,27 @@ function isValidEmail(email: string): boolean {
 
 // Filter out common placeholder emails
 function isCommonPlaceholder(email: string): boolean {
-  const placeholders = ["example.com", "test.com", "demo.com", "yoursite.com", "yourdomain.com"];
+  const placeholders = [
+    "example.com", "test.com", "demo.com", "yoursite.com", "yourdomain.com",
+    "business.com", "company.com", "website.com", "email.com", "mail.com",
+    "domain.com", "site.com", "mysite.com", "mycompany.com", "mybusiness.com",
+  ];
   return placeholders.some((p) => email.endsWith(p));
+}
+
+// Pick the best email from a list, preferring ones that match the site's root domain
+function pickBestEmail(emails: string[], siteDomain: string): string | undefined {
+  if (emails.length === 0) return undefined;
+
+  const filtered = emails.filter((e) => !isCommonPlaceholder(e));
+  if (filtered.length === 0) return undefined;
+
+  const domainMatch = filtered.find((e) => {
+    const emailDomain = e.split("@")[1] ?? "";
+    return emailDomain === siteDomain || emailDomain.endsWith("." + siteDomain);
+  });
+
+  return domainMatch ?? filtered[0];
 }
 
 // Extract phone numbers from HTML
@@ -205,15 +231,27 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
 
   notes.push("Fetched homepage");
 
+  // Detect agency and national chain
+  const siteDomainForChain = new URL(url).hostname.replace(/^www\./, "");
+  const agencyDetection = detectAgency(homepageHtml);
+  const chainDetection = detectNationalChain(homepageHtml, undefined, siteDomainForChain);
+  if (agencyDetection.isAgencyManaged) {
+    notes.push(`Agency detected: ${agencyDetection.agencyName}`);
+  }
+  if (chainDetection.isNationalChain) {
+    notes.push(`National chain detected: ${chainDetection.reason}`);
+  }
+
   // Extract from homepage
   if (!businessName) {
     businessName = extractBusinessName(homepageHtml);
     if (businessName) notes.push("Extracted business name from homepage");
   }
 
+  const siteDomain = new URL(url).hostname.replace(/^www\./, "");
   const homepageEmails = extractEmails(homepageHtml);
   if (homepageEmails.length > 0) {
-    email = homepageEmails[0];
+    email = pickBestEmail(homepageEmails, siteDomain);
     notes.push(`Found ${homepageEmails.length} email(s) on homepage`);
   }
 
@@ -240,8 +278,9 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
     // Extract additional emails
     if (!email) {
       const pageEmails = extractEmails(pageHtml);
-      if (pageEmails.length > 0) {
-        email = pageEmails[0];
+      const best = pickBestEmail(pageEmails, siteDomain);
+      if (best) {
+        email = best;
         contactPageUrl = pageUrl;
         notes.push(`Found email on contact page`);
       }
@@ -278,5 +317,9 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
     ...(address && { address }),
     enrichmentStatus,
     enrichmentNotes,
+    isAgencyManaged: agencyDetection.isAgencyManaged,
+    ...(agencyDetection.agencyName && { agencyName: agencyDetection.agencyName }),
+    isNationalChain: chainDetection.isNationalChain,
+    ...(chainDetection.reason && { chainReason: chainDetection.reason }),
   };
 }

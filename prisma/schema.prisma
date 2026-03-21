@@ -26,6 +26,10 @@ model Lead {
   contactPageUrl   String?   @map("contact_page_url")
   enrichmentStatus String?   @map("enrichment_status")
   enrichmentNotes  String?   @map("enrichment_notes")
+  isAgencyManaged  Boolean   @default(false) @map("is_agency_managed")
+  agencyName       String?   @map("agency_name")
+  isNationalChain  Boolean   @default(false) @map("is_national_chain")
+  chainReason      String?   @map("chain_reason")
 
   status           String    @default("new")
   outreachCount    Int       @default(0) @map("outreach_count")
@@ -38,5 +42,7 @@ model Lead {
 
   @@index([status])
   @@index([lighthouseScore])
+  @@index([isAgencyManaged])
+  @@index([isNationalChain])
   @@map("leads")
 }

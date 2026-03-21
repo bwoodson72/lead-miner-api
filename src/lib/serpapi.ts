@@ -59,6 +59,7 @@ async function queryGoogleSearch(
     engine: "google",
     q: keyword,
     api_key: apiKey,
+    num: "20",
     ...(location ? { location } : {}),
   });
 
@@ -158,6 +159,7 @@ async function queryGoogleLocal(
     engine: "google_local",
     q: keyword,
     api_key: apiKey,
+    num: "20",
     ...(location ? { location } : {}),
   });
 

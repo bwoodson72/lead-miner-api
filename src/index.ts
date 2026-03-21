@@ -6,6 +6,12 @@ import { getEnv } from "./lib/env.js";
 import { DEFAULT_KEYWORDS } from "./config/keywords.js";
 import { DEFAULT_THRESHOLDS } from "./config/thresholds.js";
 import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
+import { PrismaClient } from "./generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env["DATABASE_URL"]! }),
+});
 
 const allowedOrigins = (process.env["ALLOWED_ORIGINS"] ?? "http://localhost:3000")
   .split(",")
@@ -92,6 +98,49 @@ app.get("/api/cron", async (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[Server] /api/cron error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+const VALID_REJECT_REASONS = [
+  "agency_managed",
+  "national_chain",
+  "not_a_business",
+  "already_has_vendor",
+  "bad_data",
+  "other",
+] as const;
+
+app.post("/api/leads/batch-reject", async (req, res) => {
+  const { ids, reason } = req.body as { ids: unknown; reason: unknown };
+
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "number")) {
+    res.status(400).json({ success: false, error: "ids must be a non-empty array of numbers" });
+    return;
+  }
+  if (!VALID_REJECT_REASONS.includes(reason as (typeof VALID_REJECT_REASONS)[number])) {
+    res.status(400).json({ success: false, error: `reason must be one of: ${VALID_REJECT_REASONS.join(", ")}` });
+    return;
+  }
+
+  try {
+    const note = { reason: reason as string, rejectedAt: new Date().toISOString() };
+
+    await prisma.$transaction(async (tx) => {
+      for (const id of ids as number[]) {
+        const lead = await tx.lead.findUnique({ where: { id }, select: { notes: true } });
+        const existingNotes = Array.isArray(lead?.notes) ? lead.notes : [];
+        await tx.lead.update({
+          where: { id },
+          data: { status: "rejected", notes: [...existingNotes, note] },
+        });
+      }
+    });
+
+    res.json({ success: true, count: ids.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Server] /api/leads/batch-reject error:", err);
     res.status(500).json({ success: false, error: message });
   }
 });

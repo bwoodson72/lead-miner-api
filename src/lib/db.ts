@@ -39,6 +39,10 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         contactPageUrl: lead.contactPageUrl ?? null,
         enrichmentStatus: lead.enrichmentStatus ?? null,
         enrichmentNotes: lead.enrichmentNotes ?? null,
+        isAgencyManaged: lead.isAgencyManaged ?? false,
+        agencyName: lead.agencyName ?? null,
+        isNationalChain: lead.isNationalChain ?? false,
+        chainReason: lead.chainReason ?? null,
       },
       update: {
         lighthouseScore: lead.performanceScore,
@@ -53,6 +57,10 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         contactPageUrl: lead.contactPageUrl ?? undefined,
         enrichmentStatus: lead.enrichmentStatus ?? undefined,
         enrichmentNotes: lead.enrichmentNotes ?? undefined,
+        isAgencyManaged: lead.isAgencyManaged ?? undefined,
+        agencyName: lead.agencyName ?? undefined,
+        isNationalChain: lead.isNationalChain ?? undefined,
+        chainReason: lead.chainReason ?? undefined,
       },
     });
 

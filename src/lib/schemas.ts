@@ -51,6 +51,10 @@ export const LeadRecordSchema = z.object({
   address: z.string().optional(),
   enrichmentStatus: z.enum(["pending", "enriched", "failed", "skipped"]).optional(),
   enrichmentNotes: z.string().optional(),
+  isAgencyManaged: z.boolean().optional(),
+  agencyName: z.string().optional(),
+  isNationalChain: z.boolean().optional(),
+  chainReason: z.string().optional(),
 });
 
 export type LeadRecord = z.infer<typeof LeadRecordSchema>;

@@ -7,7 +7,7 @@ export type Thresholds = {
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
   performanceScore: 60,
-  lcp: 4000,
+  lcp: 8000,
   cls: 0.25,
   tbt: 300,
 };

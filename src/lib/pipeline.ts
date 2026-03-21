@@ -196,6 +196,10 @@ export async function runLeadSearchPipeline(
       ...(enrichmentResult.address && { address: enrichmentResult.address }),
       enrichmentStatus: enrichmentResult.enrichmentStatus,
       enrichmentNotes: enrichmentResult.enrichmentNotes,
+      ...(enrichmentResult.isAgencyManaged !== undefined && { isAgencyManaged: enrichmentResult.isAgencyManaged }),
+      ...(enrichmentResult.agencyName && { agencyName: enrichmentResult.agencyName }),
+      ...(enrichmentResult.isNationalChain !== undefined && { isNationalChain: enrichmentResult.isNationalChain }),
+      ...(enrichmentResult.chainReason && { chainReason: enrichmentResult.chainReason }),
     };
 
     leads.push(enrichedLead);
