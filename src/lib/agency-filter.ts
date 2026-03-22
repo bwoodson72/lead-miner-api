@@ -2,6 +2,7 @@ export const AGENCY_DOMAINS = [
   "ferociousmedia.com",
   "scorpion.co",
   "hibu.com",
+  "hibuwebsites.com",
   "thryv.com",
   "plumbingwebmasters.com",
   "bluecorona.com",
@@ -11,10 +12,15 @@ export const AGENCY_DOMAINS = [
   "kukui.com",
   "kickserv.com",
   "servicetitan.com",
-  "housecallpro.com",
   "godaddysites.com",
   "websitepro-cdn.com",
   "hiler.co",
+  "leadscience.com",
+  "txpages.com",
+  "toplinepro.com",
+  "realtimemarketing.com",
+  "hvacwebmasters.com",
+  "nwseo.com",
 ];
 
 export const AGENCY_FOOTER_PATTERNS = [
@@ -25,9 +31,24 @@ export const AGENCY_FOOTER_PATTERNS = [
   /developed\s+by\s+/i,
   /marketing\s+by\s+/i,
   /site\s+by\s+/i,
+  /design\s+by\s+/i,
+];
+
+// Known platform CDN/theme patterns to check against the full HTML
+const PLATFORM_CDN_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
+  { pattern: /le-cdn\.hibuwebsites\.com/i, name: "Hibu" },
+  { pattern: /websitepro-cdn\.com/i, name: "WebsitePro" },
+  { pattern: /nw-texasmade/i, name: "HVAC Webmasters" },
 ];
 
 export function detectAgency(html: string): { isAgencyManaged: boolean; agencyName?: string } {
+  // Check full HTML for known platform CDN patterns
+  for (const { pattern, name } of PLATFORM_CDN_PATTERNS) {
+    if (pattern.test(html)) {
+      return { isAgencyManaged: true, agencyName: name };
+    }
+  }
+
   const footer = html.slice(-3000);
 
   // Check for known agency domains in anchor hrefs

@@ -12,6 +12,8 @@ function createPrismaClient() {
 
 const prisma = createPrismaClient();
 
+export { prisma };
+
 export type UpsertResult = {
   domain: string;
   action: "created" | "updated" | "failed";

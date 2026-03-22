@@ -30,6 +30,7 @@ model Lead {
   agencyName       String?   @map("agency_name")
   isNationalChain  Boolean   @default(false) @map("is_national_chain")
   chainReason      String?   @map("chain_reason")
+  followUpDate     DateTime? @map("follow_up_date")
 
   status           String    @default("new")
   outreachCount    Int       @default(0) @map("outreach_count")
@@ -44,5 +45,6 @@ model Lead {
   @@index([lighthouseScore])
   @@index([isAgencyManaged])
   @@index([isNationalChain])
+  @@index([followUpDate])
   @@map("leads")
 }

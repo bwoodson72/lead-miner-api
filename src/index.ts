@@ -102,14 +102,173 @@ app.get("/api/cron", async (req, res) => {
   }
 });
 
+const VALID_STATUSES = [
+  "new", "contacted", "responded", "call_scheduled",
+  "proposal_sent", "won", "lost", "rejected",
+] as const;
+
 const VALID_REJECT_REASONS = [
   "agency_managed",
   "national_chain",
   "not_a_business",
   "already_has_vendor",
   "bad_data",
+  "parked_domain",
   "other",
 ] as const;
+
+app.get("/api/leads", async (req, res) => {
+  const { status, minLcp, isAgencyManaged, isNationalChain, hideRejected, followUpDue, limit, offset } = req.query as Record<string, string | undefined>;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where: Record<string, any> = {};
+
+  if (status) where["status"] = status;
+  if (hideRejected === "true" && !status) where["status"] = { not: "rejected" };
+  if (minLcp) where["lcp"] = { gte: parseInt(minLcp, 10) };
+  if (isAgencyManaged !== undefined) where["isAgencyManaged"] = isAgencyManaged === "true";
+  if (isNationalChain !== undefined) where["isNationalChain"] = isNationalChain === "true";
+  if (followUpDue === "true") {
+    where["followUpDate"] = { lte: new Date() };
+    where["status"] = "contacted";
+  }
+
+  const take = limit ? parseInt(limit, 10) : 50;
+  const skip = offset ? parseInt(offset, 10) : 0;
+
+  try {
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({ where, orderBy: { lcp: "desc" }, take, skip }),
+      prisma.lead.count({ where }),
+    ]);
+    res.json({ leads, total });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Server] GET /api/leads error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.patch("/api/leads/:id/status", async (req, res) => {
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ success: false, error: "Invalid id" }); return; }
+
+  const { status, followUpDate } = req.body as { status: unknown; followUpDate?: string };
+  if (!VALID_STATUSES.includes(status as (typeof VALID_STATUSES)[number])) {
+    res.status(400).json({ success: false, error: `status must be one of: ${VALID_STATUSES.join(", ")}` });
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data: Record<string, any> = { status };
+
+  if (status === "contacted") {
+    data["outreachCount"] = { increment: 1 };
+    data["lastOutreachDate"] = new Date();
+    data["followUpDate"] = followUpDate ? new Date(followUpDate) : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  } else if (status === "responded" || status === "call_scheduled" || status === "rejected") {
+    data["followUpDate"] = null;
+  } else if (followUpDate) {
+    data["followUpDate"] = new Date(followUpDate);
+  }
+
+  try {
+    const lead = await prisma.lead.update({ where: { id }, data });
+    res.json(lead);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Record to update not found")) { res.status(404).json({ success: false, error: "Lead not found" }); return; }
+    console.error("[Server] PATCH /api/leads/:id/status error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.delete("/api/leads/:id", async (req, res) => {
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ success: false, error: "Invalid id" }); return; }
+
+  try {
+    await prisma.lead.delete({ where: { id } });
+    res.json({ success: true, id });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Record to delete does not exist")) { res.status(404).json({ success: false, error: "Lead not found" }); return; }
+    console.error("[Server] DELETE /api/leads/:id error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.patch("/api/leads/:id/follow-up", async (req, res) => {
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ success: false, error: "Invalid id" }); return; }
+
+  const { followUpDate } = req.body as { followUpDate?: string };
+  if (!followUpDate) { res.status(400).json({ success: false, error: "followUpDate is required" }); return; }
+
+  try {
+    const lead = await prisma.lead.update({ where: { id }, data: { followUpDate: new Date(followUpDate) } });
+    res.json(lead);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Record to update not found")) { res.status(404).json({ success: false, error: "Lead not found" }); return; }
+    console.error("[Server] PATCH /api/leads/:id/follow-up error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.patch("/api/leads/:id/snooze", async (req, res) => {
+  const id = parseInt(req.params["id"] ?? "", 10);
+  if (isNaN(id)) { res.status(400).json({ success: false, error: "Invalid id" }); return; }
+
+  const rawDays = (req.body as { days?: unknown }).days;
+  const days = rawDays !== undefined ? Number(rawDays) : 3;
+  if (!Number.isInteger(days) || days < 1 || days > 30) {
+    res.status(400).json({ success: false, error: "days must be an integer between 1 and 30" });
+    return;
+  }
+
+  const followUpDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+  try {
+    const lead = await prisma.lead.update({ where: { id }, data: { followUpDate } });
+    res.json(lead);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("Record to update not found")) { res.status(404).json({ success: false, error: "Lead not found" }); return; }
+    console.error("[Server] PATCH /api/leads/:id/snooze error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+app.get("/api/leads/follow-up-summary", async (_req, res) => {
+  const now = new Date();
+
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+
+  const startOfTomorrow = new Date(startOfToday);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+  const endOfIn7Days = new Date(startOfToday);
+  endOfIn7Days.setDate(endOfIn7Days.getDate() + 7);
+  endOfIn7Days.setHours(23, 59, 59, 999);
+
+  try {
+    const [overdue, dueToday, upcoming] = await Promise.all([
+      prisma.lead.count({ where: { status: "contacted", followUpDate: { lt: startOfToday } } }),
+      prisma.lead.count({ where: { status: "contacted", followUpDate: { gte: startOfToday, lte: endOfToday } } }),
+      prisma.lead.count({ where: { status: "contacted", followUpDate: { gte: startOfTomorrow, lte: endOfIn7Days } } }),
+    ]);
+    res.json({ overdue, dueToday, upcoming });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Server] GET /api/leads/follow-up-summary error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
 
 app.post("/api/leads/batch-reject", async (req, res) => {
   const { ids, reason } = req.body as { ids: unknown; reason: unknown };
@@ -132,7 +291,7 @@ app.post("/api/leads/batch-reject", async (req, res) => {
         const existingNotes = Array.isArray(lead?.notes) ? lead.notes : [];
         await tx.lead.update({
           where: { id },
-          data: { status: "rejected", notes: [...existingNotes, note] },
+          data: { status: "rejected", followUpDate: null, notes: [...existingNotes, note] },
         });
       }
     });

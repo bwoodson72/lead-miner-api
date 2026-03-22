@@ -4,10 +4,10 @@ import { type Thresholds } from "../config/thresholds.js";
 
 export function isSlowSite(result: PageSpeedResult, thresholds: Thresholds): boolean {
   return (
-    result.performanceScore < thresholds.performanceScore ||
-    result.lcp > thresholds.lcp ||
-    result.cls > thresholds.cls ||
-    result.tbt > thresholds.tbt
+    result.lcp > thresholds.lcp &&
+    (result.performanceScore < thresholds.performanceScore ||
+     result.cls > thresholds.cls ||
+     result.tbt > thresholds.tbt)
   );
 }
 

@@ -122,7 +122,9 @@ function isCommonPlaceholder(email: string): boolean {
     "example.com", "test.com", "demo.com", "yoursite.com", "yourdomain.com",
     "business.com", "company.com", "website.com", "email.com", "mail.com",
     "domain.com", "site.com", "mysite.com", "mycompany.com", "mybusiness.com",
+    "mailservice.com",
   ];
+  if (/\.(png|jpg|webp|svg|gif)$/i.test(email)) return true;
   return placeholders.some((p) => email.endsWith(p));
 }
 
@@ -169,6 +171,33 @@ function extractPhones(html: string): string[] {
 // Normalize phone number
 function normalizePhone(phone: string): string {
   return phone.replace(/[^\d+]/g, "");
+}
+
+// Pick the best phone from a list, preferring locally-appearing numbers by frequency
+function pickBestPhone(phones: string[], html: string): string | undefined {
+  // Normalize to 10-digit US numbers, stripping +1 or leading 1
+  const valid = phones
+    .map((p) => {
+      const digits = p.replace(/\D/g, "");
+      // Strip leading country code 1 if 11 digits
+      return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+    })
+    .filter((d) => d.length === 10);
+
+  if (valid.length === 0) return undefined;
+  if (valid.length === 1) return valid[0];
+
+  // Count occurrences of each number in the raw HTML
+  const counts = new Map<string, number>();
+  for (const digits of valid) {
+    // Build a loose pattern to match formatted variants
+    const pattern = digits.replace(/(\d{3})(\d{3})(\d{4})/, "$1.{0,2}$2.{0,2}$3");
+    const regex = new RegExp(pattern, "g");
+    const occurrences = (html.match(regex) ?? []).length;
+    counts.set(digits, occurrences);
+  }
+
+  return valid.reduce((best, cur) => (counts.get(cur)! > counts.get(best)! ? cur : best));
 }
 
 // Extract contact page URLs
@@ -257,7 +286,7 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
 
   const homepagePhones = extractPhones(homepageHtml);
   if (homepagePhones.length > 0) {
-    phone = homepagePhones[0];
+    phone = pickBestPhone(homepagePhones, homepageHtml);
     notes.push(`Found ${homepagePhones.length} phone(s) on homepage`);
   }
 
@@ -289,8 +318,9 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
     // Extract additional phones
     if (!phone) {
       const pagePhones = extractPhones(pageHtml);
-      if (pagePhones.length > 0) {
-        phone = pagePhones[0];
+      const best = pickBestPhone(pagePhones, pageHtml);
+      if (best) {
+        phone = best;
         if (!contactPageUrl) contactPageUrl = pageUrl;
         notes.push(`Found phone on contact page`);
       }

@@ -1,5 +1,14 @@
 const TOLL_FREE_PREFIXES = ["800", "855", "877", "888", "866", "844"];
 
+const PARKED_DOMAIN_PATTERNS = [
+  /this domain is for sale/i,
+  /buy this domain/i,
+  /hugedomains\.com/i,
+  /sedo\.com/i,
+  /afternic\.com/i,
+  /godaddy auctions/i,
+];
+
 const MULTI_LOCATION_PATTERNS = [
   /find your local/i,
   /find a location/i,
@@ -25,6 +34,12 @@ export function detectNationalChain(
 
   if (domain?.endsWith(".org")) {
     return { isNationalChain: true, reason: "org_domain" };
+  }
+
+  for (const pattern of PARKED_DOMAIN_PATTERNS) {
+    if (pattern.test(html)) {
+      return { isNationalChain: true, reason: "parked_domain" };
+    }
   }
 
   for (const pattern of MULTI_LOCATION_PATTERNS) {
