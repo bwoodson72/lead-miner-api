@@ -60,6 +60,8 @@ async function queryGoogleSearch(
     q: keyword,
     api_key: apiKey,
     num: "20",
+    gl: "us",
+    hl: "en",
     ...(location ? { location } : {}),
   });
 
@@ -70,6 +72,11 @@ async function queryGoogleSearch(
   const data = (await response.json()) as Record<string, unknown>;
 
   console.log(`[SerpApi] queryGoogleSearch response keys: ${Object.keys(data).join(", ")}`);
+  const hasAdsKey = Array.isArray(data.ads);
+  const adsCount = hasAdsKey ? (data.ads as unknown[]).length : 0;
+  const hasLocalAdsKey = !!data.local_ads;
+  const hasLocalResultsKey = !!data.local_results;
+  console.log(`[SerpApi] queryGoogleSearch ad detection: ads=${adsCount}, local_ads=${hasLocalAdsKey}, local_results=${hasLocalResultsKey}`);
 
   const results: SerpAd[] = [];
 
@@ -160,6 +167,8 @@ async function queryGoogleLocal(
     q: keyword,
     api_key: apiKey,
     num: "20",
+    gl: "us",
+    hl: "en",
     ...(location ? { location } : {}),
   });
 
@@ -170,6 +179,11 @@ async function queryGoogleLocal(
   const data = (await response.json()) as Record<string, unknown>;
 
   console.log(`[SerpApi] queryGoogleLocal response keys: ${Object.keys(data).join(", ")}`);
+  const hasAdsResults = Array.isArray(data.ads_results);
+  const adsResultsCount = hasAdsResults ? (data.ads_results as unknown[]).length : 0;
+  const hasLocalResults = Array.isArray(data.local_results);
+  const localResultsCount = hasLocalResults ? (data.local_results as unknown[]).length : 0;
+  console.log(`[SerpApi] queryGoogleLocal ad detection: ads_results=${adsResultsCount}, local_results=${localResultsCount}`);
 
   const results: SerpAd[] = [];
 
@@ -196,30 +210,31 @@ async function queryGoogleLocal(
   }
   console.log(`[SerpApi] queryGoogleLocal local_results with website: ${countLocal}`);
 
-  // Ads results — website at ad.links.website or ad.displayed_link
+  // Ads results — per SerpAPI docs, ads_results[] has displayed_link (bare domain),
+  // ad_title (ad headline), and title (business name). No links.website exists.
   const adsResults = Array.isArray(data.ads_results)
     ? (data.ads_results as Record<string, unknown>[])
     : [];
   let countAds = 0;
   for (const ad of adsResults) {
-    const links = ad["links"] as Record<string, unknown> | undefined;
-    const website =
-      (links?.["website"] as string | undefined) ??
-      (ad["displayed_link"] as string | undefined);
-    if (!website) continue;
+    const displayedLink = ad["displayed_link"] as string | undefined;
+    if (!displayedLink) continue;
+    const website = displayedLink.startsWith("http")
+      ? displayedLink
+      : `https://${displayedLink}`;
     const entry = buildSerpAd(
       keyword,
       "paid_ad",
-      ad["title"] as string | undefined,
+      ad["ad_title"] as string | undefined,
       website,
-      undefined,
-      ad["name"] as string | undefined,
+      displayedLink,
+      ad["title"] as string | undefined,
       ad["phone"] as string | undefined,
       ad["address"] as string | undefined
     );
     if (entry) { results.push(entry); countAds++; }
   }
-  console.log(`[SerpApi] queryGoogleLocal ads_results with website: ${countAds}`);
+  console.log(`[SerpApi] queryGoogleLocal ads_results: ${countAds}`);
 
   return results;
 }
@@ -236,17 +251,22 @@ export async function searchAds(keyword: string, location?: string): Promise<Ser
 
     console.log(`[SerpApi] searchAds google results: ${googleResults.length}, local results: ${localResults.length}`);
 
+    // Merge results, preferring paid_ad over local_organic for same domain
     const all = [...googleResults, ...localResults];
-    const seen = new Set<string>();
-    const deduped: SerpAd[] = [];
+    const byDomain = new Map<string, SerpAd>();
 
     for (const ad of all) {
       const key = ad.displayDomain.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduped.push(ad);
+      const existing = byDomain.get(key);
+      if (!existing) {
+        byDomain.set(key, ad);
+      } else if (ad.adSource === "paid_ad" && existing.adSource === "local_organic") {
+        // Paid ad takes priority over organic for same domain
+        byDomain.set(key, ad);
       }
     }
+
+    const deduped = Array.from(byDomain.values());
 
     console.log(`[SerpApi] searchAds total unique domains: ${deduped.length}`);
     return deduped;
