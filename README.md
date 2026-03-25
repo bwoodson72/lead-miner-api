@@ -13,7 +13,7 @@ npm run dev
 
 ## Environment Variables
 
-- SERPAPI_KEY — from serpapi.com
+- SERPER_API_KEY — from serper.dev (free tier: 2,500 searches, no credit card required)
 - PAGESPEED_API_KEY — from Google Cloud Console
 - RESEND_API_KEY — from resend.com
 - REPORT_EMAIL — default recipient email
@@ -45,7 +45,7 @@ The pipeline automatically discovers, analyzes, enriches, and pushes leads to Hu
 
 ### Pipeline Steps
 
-1. **Search** — Query SerpApi for businesses matching keywords (paid ads + local results)
+1. **Search** — Query Serper.dev for businesses matching keywords (paid ads + local results)
 2. **Filter** — Deduplicate by domain and filter out known franchises
 3. **Analyze** — Run PageSpeed Insights mobile audits (45s timeout per site)
 4. **Identify Slow Sites** — Filter sites below performance thresholds

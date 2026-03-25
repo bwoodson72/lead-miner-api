@@ -20,7 +20,7 @@ function buildSerpAd(
       : `https://${link}`;
 
   if (fullLink.includes("google.com/localservices") || fullLink.includes("google.com/maps")) {
-    console.log("[SerpApi] Skipping Google URL:", fullLink.slice(0, 100));
+    console.log("[Serper] Skipping Google URL:", fullLink.slice(0, 100));
     return null;
   }
 
@@ -43,198 +43,143 @@ function buildSerpAd(
   });
 
   if (!result.success) {
-    console.log(`[SerpApi] buildSerpAd validation failed for link=${link}:`, result.error.issues);
+    console.log(`[Serper] buildSerpAd validation failed for link=${link}:`, result.error.issues);
     return null;
   }
 
   return result.data;
 }
 
-async function queryGoogleSearch(
+async function querySerperSearch(
   apiKey: string,
   keyword: string,
   location?: string
 ): Promise<SerpAd[]> {
-  const params = new URLSearchParams({
-    engine: "google",
+  const body: Record<string, unknown> = {
     q: keyword,
-    api_key: apiKey,
-    num: "20",
     gl: "us",
     hl: "en",
-    ...(location ? { location } : {}),
+    num: 20,
+  };
+  if (location) body.location = location;
+
+  console.log(`[Serper] Searching: keyword="${keyword}", location="${location ?? ""}"`);
+
+  const response = await fetch("https://google.serper.dev/search", {
+    method: "POST",
+    headers: {
+      "X-API-KEY": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 
-  const url = `https://serpapi.com/search.json?${params.toString()}`;
-  console.log(`[SerpApi] queryGoogleSearch fetching: engine=google, keyword="${keyword}", location="${location ?? ""}"`);
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[Serper] Search API error ${response.status}: ${text}`);
+    return [];
+  }
 
-  const response = await fetch(url);
   const data = (await response.json()) as Record<string, unknown>;
 
-  console.log(`[SerpApi] queryGoogleSearch response keys: ${Object.keys(data).join(", ")}`);
-  const hasAdsKey = Array.isArray(data.ads);
-  const adsCount = hasAdsKey ? (data.ads as unknown[]).length : 0;
-  const hasLocalAdsKey = !!data.local_ads;
-  const hasLocalResultsKey = !!data.local_results;
-  console.log(`[SerpApi] queryGoogleSearch ad detection: ads=${adsCount}, local_ads=${hasLocalAdsKey}, local_results=${hasLocalResultsKey}`);
+  const topLevelKeys = Object.keys(data);
+  console.log(`[Serper] Response keys: ${topLevelKeys.join(", ")}`);
 
   const results: SerpAd[] = [];
 
-  // Source A: text ads
+  // Source A: Paid ads
   const ads = Array.isArray(data.ads) ? (data.ads as Record<string, unknown>[]) : [];
-  let countA = 0;
+  let countAds = 0;
   for (const ad of ads) {
     const entry = buildSerpAd(
       keyword,
       "paid_ad",
       ad["title"] as string | undefined,
       ad["link"] as string | undefined,
-      ad["displayed_link"] as string | undefined,
-      undefined, // businessName - not typically in text ads
-      ad["phone"] as string | undefined,
-      ad["address"] as string | undefined
-    );
-    if (entry) { results.push(entry); countA++; }
-  }
-  console.log(`[SerpApi] queryGoogleSearch Source A (text ads): ${countA} results`);
-
-  // Source B: local service ads
-  const localAds = data.local_ads as Record<string, unknown> | undefined;
-  const localAdsArr = Array.isArray(localAds?.["ads"])
-    ? (localAds!["ads"] as Record<string, unknown>[])
-    : [];
-  let countB = 0;
-  for (const ad of localAdsArr) {
-    const link = (ad["link"] ?? ad["website"]) as string | undefined;
-    if (!link) continue;
-    if (link.startsWith("https://www.google.com/")) {
-      console.log("[SerpApi] Skipping local service ad with Google redirect URL for:", ad["title"] || "unknown");
-      continue;
-    }
-    const entry = buildSerpAd(
-      keyword,
-      "paid_ad",
-      ad["title"] as string | undefined,
-      link,
+      ad["domain"] as string | undefined,
       undefined,
-      ad["name"] as string | undefined,
-      ad["phone"] as string | undefined,
-      ad["address"] as string | undefined
+      undefined,
+      undefined
     );
-    if (entry) { results.push(entry); countB++; }
+    if (entry) { results.push(entry); countAds++; }
   }
-  console.log(`[SerpApi] queryGoogleSearch Source B (local service ads): ${countB} results`);
+  console.log(`[Serper] Source A (paid ads): ${countAds}`);
 
-  // Source C: local 3-pack — may be array or object with places array
-  let localResultsArr: Record<string, unknown>[] = [];
-  if (Array.isArray(data.local_results)) {
-    localResultsArr = data.local_results as Record<string, unknown>[];
-  } else if (data.local_results && typeof data.local_results === "object") {
-    const lr = data.local_results as Record<string, unknown>;
-    if (Array.isArray(lr["places"])) {
-      localResultsArr = lr["places"] as Record<string, unknown>[];
-    }
-  }
-  let countC = 0;
-  for (const result of localResultsArr) {
-    const links = result["links"] as Record<string, unknown> | undefined;
-    const website = links?.["website"] as string | undefined;
+  // Source B: Places / local pack from search results
+  const places = Array.isArray(data.places) ? (data.places as Record<string, unknown>[]) : [];
+  let countPlaces = 0;
+  for (const place of places) {
+    const website = place["website"] as string | undefined;
     if (!website) continue;
     const entry = buildSerpAd(
       keyword,
       "local_organic",
-      result["title"] as string | undefined,
+      place["title"] as string | undefined,
       website,
       undefined,
-      result["title"] as string | undefined,
-      result["phone"] as string | undefined,
-      result["address"] as string | undefined
+      place["title"] as string | undefined,
+      place["phoneNumber"] as string | undefined,
+      place["address"] as string | undefined
     );
-    if (entry) { results.push(entry); countC++; }
+    if (entry) { results.push(entry); countPlaces++; }
   }
-  console.log(`[SerpApi] queryGoogleSearch Source C (local 3-pack): ${countC} results`);
+  console.log(`[Serper] Source B (places): ${countPlaces}`);
 
   return results;
 }
 
-async function queryGoogleLocal(
+async function querySerperPlaces(
   apiKey: string,
   keyword: string,
   location?: string
 ): Promise<SerpAd[]> {
-  const params = new URLSearchParams({
-    engine: "google_local",
+  const body: Record<string, unknown> = {
     q: keyword,
-    api_key: apiKey,
-    num: "20",
     gl: "us",
     hl: "en",
-    ...(location ? { location } : {}),
+    num: 20,
+  };
+  if (location) body.location = location;
+
+  console.log(`[Serper] Places search: keyword="${keyword}", location="${location ?? ""}"`);
+
+  const response = await fetch("https://google.serper.dev/places", {
+    method: "POST",
+    headers: {
+      "X-API-KEY": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 
-  const url = `https://serpapi.com/search.json?${params.toString()}`;
-  console.log(`[SerpApi] queryGoogleLocal fetching: engine=google_local, keyword="${keyword}", location="${location ?? ""}"`);
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[Serper] Places API error ${response.status}: ${text}`);
+    return [];
+  }
 
-  const response = await fetch(url);
   const data = (await response.json()) as Record<string, unknown>;
-
-  console.log(`[SerpApi] queryGoogleLocal response keys: ${Object.keys(data).join(", ")}`);
-  const hasAdsResults = Array.isArray(data.ads_results);
-  const adsResultsCount = hasAdsResults ? (data.ads_results as unknown[]).length : 0;
-  const hasLocalResults = Array.isArray(data.local_results);
-  const localResultsCount = hasLocalResults ? (data.local_results as unknown[]).length : 0;
-  console.log(`[SerpApi] queryGoogleLocal ad detection: ads_results=${adsResultsCount}, local_results=${localResultsCount}`);
 
   const results: SerpAd[] = [];
 
-  // Local results — website at result.links.website
-  const localResults = Array.isArray(data.local_results)
-    ? (data.local_results as Record<string, unknown>[])
-    : [];
-  let countLocal = 0;
-  for (const result of localResults) {
-    const links = result["links"] as Record<string, unknown> | undefined;
-    const website = links?.["website"] as string | undefined;
+  const places = Array.isArray(data.places) ? (data.places as Record<string, unknown>[]) : [];
+  let count = 0;
+  for (const place of places) {
+    const website = place["website"] as string | undefined;
     if (!website) continue;
     const entry = buildSerpAd(
       keyword,
       "local_organic",
-      result["title"] as string | undefined,
+      place["title"] as string | undefined,
       website,
       undefined,
-      result["title"] as string | undefined,
-      result["phone"] as string | undefined,
-      result["address"] as string | undefined
+      place["title"] as string | undefined,
+      place["phoneNumber"] as string | undefined,
+      place["address"] as string | undefined
     );
-    if (entry) { results.push(entry); countLocal++; }
+    if (entry) { results.push(entry); count++; }
   }
-  console.log(`[SerpApi] queryGoogleLocal local_results with website: ${countLocal}`);
-
-  // Ads results — per SerpAPI docs, ads_results[] has displayed_link (bare domain),
-  // ad_title (ad headline), and title (business name). No links.website exists.
-  const adsResults = Array.isArray(data.ads_results)
-    ? (data.ads_results as Record<string, unknown>[])
-    : [];
-  let countAds = 0;
-  for (const ad of adsResults) {
-    const displayedLink = ad["displayed_link"] as string | undefined;
-    if (!displayedLink) continue;
-    const website = displayedLink.startsWith("http")
-      ? displayedLink
-      : `https://${displayedLink}`;
-    const entry = buildSerpAd(
-      keyword,
-      "paid_ad",
-      ad["ad_title"] as string | undefined,
-      website,
-      displayedLink,
-      ad["title"] as string | undefined,
-      ad["phone"] as string | undefined,
-      ad["address"] as string | undefined
-    );
-    if (entry) { results.push(entry); countAds++; }
-  }
-  console.log(`[SerpApi] queryGoogleLocal ads_results: ${countAds}`);
+  console.log(`[Serper] Places results with website: ${count}`);
 
   return results;
 }
@@ -242,17 +187,17 @@ async function queryGoogleLocal(
 export async function searchAds(keyword: string, location?: string): Promise<SerpAd[]> {
   try {
     const { env } = await import("./env.js");
-    const apiKey = env.SERPAPI_KEY;
+    const apiKey = env.SERPER_API_KEY;
 
-    const [googleResults, localResults] = await Promise.all([
-      queryGoogleSearch(apiKey, keyword, location),
-      queryGoogleLocal(apiKey, keyword, location),
+    const [searchResults, placesResults] = await Promise.all([
+      querySerperSearch(apiKey, keyword, location),
+      querySerperPlaces(apiKey, keyword, location),
     ]);
 
-    console.log(`[SerpApi] searchAds google results: ${googleResults.length}, local results: ${localResults.length}`);
+    console.log(`[Serper] searchAds search results: ${searchResults.length}, places results: ${placesResults.length}`);
 
     // Merge results, preferring paid_ad over local_organic for same domain
-    const all = [...googleResults, ...localResults];
+    const all = [...searchResults, ...placesResults];
     const byDomain = new Map<string, SerpAd>();
 
     for (const ad of all) {
@@ -261,17 +206,15 @@ export async function searchAds(keyword: string, location?: string): Promise<Ser
       if (!existing) {
         byDomain.set(key, ad);
       } else if (ad.adSource === "paid_ad" && existing.adSource === "local_organic") {
-        // Paid ad takes priority over organic for same domain
         byDomain.set(key, ad);
       }
     }
 
     const deduped = Array.from(byDomain.values());
-
-    console.log(`[SerpApi] searchAds total unique domains: ${deduped.length}`);
+    console.log(`[Serper] searchAds total unique domains: ${deduped.length}`);
     return deduped;
   } catch (err) {
-    console.log(`[SerpApi] searchAds error:`, err);
+    console.error(`[Serper] searchAds error:`, err);
     return [];
   }
 }

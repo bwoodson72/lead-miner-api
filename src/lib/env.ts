@@ -4,7 +4,8 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const envSchema = z.object({
-  SERPAPI_KEY: z.string().min(1),
+  SERPER_API_KEY: z.string().min(1),
+  SERPAPI_KEY: z.string().min(1).optional(),
   PAGESPEED_API_KEY: z.string().min(1),
   RESEND_API_KEY: z.string().min(1),
   REPORT_EMAIL: z.string().email(),

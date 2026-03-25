@@ -81,7 +81,7 @@ export async function runLeadSearchPipeline(
       } else {
         diagnostics.messages.push(`Found ${ads.length} ad(s) for keyword "${keyword}"`);
       }
-      diagnostics.messages.push(`Used 2 SerpApi credits for: ${keyword}`);
+      diagnostics.messages.push(`Used 2 Serper credits for: ${keyword}`);
       return ads;
     })
   );
