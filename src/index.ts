@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { stringify as csvStringify } from "csv-stringify/sync";
 import { KeywordInputSchema } from "./lib/schemas.js";
 import { runLeadSearchPipeline } from "./lib/pipeline.js";
 import { getEnv } from "./lib/env.js";
@@ -116,6 +117,56 @@ const VALID_REJECT_REASONS = [
   "parked_domain",
   "other",
 ] as const;
+
+app.get("/api/leads/export", async (req, res) => {
+  const { status, hideRejected, hideAgency, hideChains, hasEmail, hasPhone, search } = req.query as Record<string, string | undefined>;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where: Record<string, any> = {};
+
+  if (status) where["status"] = status;
+  if (hideRejected === "true" && !status) where["status"] = { not: "rejected" };
+  if (hideAgency === "true") where["isAgencyManaged"] = false;
+  if (hideChains === "true") where["isNationalChain"] = false;
+  if (hasEmail === "true") where["email"] = { not: null };
+  if (hasPhone === "true") where["phone"] = { not: null };
+  if (search) where["OR"] = [
+    { businessName: { contains: search, mode: "insensitive" } },
+    { domain: { contains: search, mode: "insensitive" } },
+  ];
+
+  try {
+    const leads = await prisma.lead.findMany({ where, orderBy: { lcp: "desc" } });
+
+    const rows = leads.map((lead) => ({
+      "Business Name": lead.businessName ?? "",
+      "Domain": lead.domain,
+      "Website": lead.landingPageUrl,
+      "Phone": lead.phone ?? "",
+      "Email": lead.email ?? "",
+      "Address": lead.address ?? "",
+      "Keyword": lead.keyword,
+      "PageSpeed Score": lead.lighthouseScore,
+      "LCP (ms)": lead.lcp,
+      "Status": lead.status,
+      "Outreach Count": lead.outreachCount,
+      "Last Outreach": lead.lastOutreachDate?.toISOString() ?? "",
+      "Follow Up Date": lead.followUpDate?.toISOString() ?? "",
+      "Agency Managed": lead.isAgencyManaged ? "Yes" : "No",
+      "National Chain": lead.isNationalChain ? "Yes" : "No",
+    }));
+
+    const csv = csvStringify(rows, { header: true });
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", 'attachment; filename="leads.csv"');
+    res.send(csv);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Server] GET /api/leads/export error:", err);
+    res.status(500).json({ success: false, error: message });
+  }
+});
 
 app.get("/api/leads", async (req, res) => {
   const { status, minLcp, isAgencyManaged, isNationalChain, hideRejected, followUpDue, limit, offset } = req.query as Record<string, string | undefined>;
