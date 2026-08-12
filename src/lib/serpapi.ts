@@ -29,11 +29,18 @@ const BROAD_SEARCH_MARKETS: SearchMarket[] = [
   { queryLabel: "Waxahachie TX", serpApiLocation: "Waxahachie, Texas, United States" },
   { queryLabel: "Midlothian TX", serpApiLocation: "Midlothian, Texas, United States" },
   { queryLabel: "Cedar Hill TX", serpApiLocation: "Cedar Hill, Texas, United States" },
+  { queryLabel: "Corsicana TX", serpApiLocation: "Corsicana, Texas, United States" },
+  { queryLabel: "Hillsboro TX", serpApiLocation: "Hillsboro, Texas, United States" },
+  { queryLabel: "Ennis TX", serpApiLocation: "Ennis, Texas, United States" },
   { queryLabel: "Denton TX", serpApiLocation: "Denton, Texas, United States" },
   { queryLabel: "Wichita Falls TX", serpApiLocation: "Wichita Falls, Texas, United States" },
   { queryLabel: "Abilene TX", serpApiLocation: "Abilene, Texas, United States" },
+  { queryLabel: "San Angelo TX", serpApiLocation: "San Angelo, Texas, United States" },
+  { queryLabel: "Brownwood TX", serpApiLocation: "Brownwood, Texas, United States" },
   { queryLabel: "Tyler TX", serpApiLocation: "Tyler, Texas, United States" },
   { queryLabel: "Longview TX", serpApiLocation: "Longview, Texas, United States" },
+  { queryLabel: "Lufkin TX", serpApiLocation: "Lufkin, Texas, United States" },
+  { queryLabel: "Nacogdoches TX", serpApiLocation: "Nacogdoches, Texas, United States" },
   { queryLabel: "Temple TX", serpApiLocation: "Temple, Texas, United States" },
   { queryLabel: "Killeen TX", serpApiLocation: "Killeen, Texas, United States" },
   { queryLabel: "Waco TX", serpApiLocation: "Waco, Texas, United States" },
@@ -123,9 +130,10 @@ function mergeByDomain(target: Map<string, SerpAd>, results: SerpAd[]): void {
 async function querySerperPlaces(
   apiKey: string,
   keyword: string,
-  market?: SearchMarket
+  market?: SearchMarket,
+  appendMarket = true
 ): Promise<SerpAd[]> {
-  const q = market ? `${keyword} ${market.queryLabel}` : keyword;
+  const q = market && appendMarket ? `${keyword} ${market.queryLabel}` : keyword;
   const response = await fetch("https://google.serper.dev/places", {
     method: "POST",
     headers: {
@@ -243,10 +251,11 @@ async function searchOneMarket(
   keyword: string,
   market: SearchMarket,
   serperKey: string,
-  serpApiKey?: string
+  serpApiKey?: string,
+  appendMarket = true
 ): Promise<SerpAd[]> {
   const [organic, paid] = await Promise.all([
-    querySerperPlaces(serperKey, keyword, market),
+    querySerperPlaces(serperKey, keyword, market, appendMarket),
     serpApiKey ? querySerpApiAds(serpApiKey, keyword, market) : Promise.resolve([]),
   ]);
 
@@ -266,7 +275,6 @@ export async function searchAds(
       console.warn(`[SerpApi] SERPAPI_KEY missing; paid ads will be skipped`);
     }
 
-    // Explicit override always means one market.
     if (location?.trim()) {
       mergeByDomain(
         byDomain,
@@ -274,12 +282,11 @@ export async function searchAds(
           keyword,
           explicitMarket(location),
           env.SERPER_API_KEY,
-          env.SERPAPI_KEY
+          env.SERPAPI_KEY,
+          true
         )
       );
     } else {
-      // A keyword that already names one of our configured markets should also
-      // remain focused rather than fan out statewide.
       const embeddedMarket = marketFromKeyword(keyword);
 
       if (embeddedMarket) {
@@ -289,23 +296,21 @@ export async function searchAds(
             keyword,
             embeddedMarket,
             env.SERPER_API_KEY,
-            env.SERPAPI_KEY
+            env.SERPAPI_KEY,
+            false
           )
         );
       } else {
-        // Broad keyword: fan out until discovery has enough headroom to survive
-        // later franchise filtering and cross-keyword dedupe.
-        const discoveryTarget = Math.max(
-          targetDomains,
-          targetDomains + Math.max(20, Math.ceil(targetDomains * 0.25))
-        );
+        const discoveryTarget =
+          targetDomains + Math.max(20, Math.ceil(targetDomains * 0.25));
 
         for (const market of BROAD_SEARCH_MARKETS) {
           const marketResults = await searchOneMarket(
             keyword,
             market,
             env.SERPER_API_KEY,
-            env.SERPAPI_KEY
+            env.SERPAPI_KEY,
+            true
           );
           mergeByDomain(byDomain, marketResults);
 
