@@ -1,6 +1,6 @@
 # Lead Miner API
 
-Express API server that discovers businesses with slow websites by searching Google for local businesses via SerpApi, analyzing their mobile performance with PageSpeed Insights, and emailing a lead report.
+Express API server that discovers businesses with slow websites by combining Serper local-business discovery with SerpApi paid Google Ads discovery, analyzing mobile performance with PageSpeed Insights, and emailing a lead report.
 
 Pairs with a Next.js frontend. Deploy free on Render.
 
@@ -13,11 +13,11 @@ npm run dev
 
 ## Environment Variables
 
-- SERPER_API_KEY — from serper.dev (free tier: 2,500 searches, no credit card required)
+- SERPER_API_KEY — from serper.dev; used for organic/local business discovery
+- SERPAPI_KEY — from serpapi.com; used for paid Google Ads discovery via the `google_ads` engine
 - PAGESPEED_API_KEY — from Google Cloud Console
 - RESEND_API_KEY — from resend.com
 - REPORT_EMAIL — default recipient email
-- HUBSPOT_ACCESS_TOKEN — private app access token from HubSpot
 - CRON_SECRET — (optional) protects /api/cron
 - ALLOWED_ORIGINS — comma-separated frontend URLs (default: http://localhost:3000)
 - PORT — server port (default: 3001)
@@ -34,84 +34,40 @@ npm run dev
 2. Create a Web Service on render.com
 3. Build Command: npm install && npm run build
 4. Start Command: npm run start
-5. Add environment variables
+5. Add environment variables, including both `SERPER_API_KEY` and `SERPAPI_KEY`
 6. Set ALLOWED_ORIGINS to your frontend URL
 
-Free tier sleeps after 15 min inactivity. First request after sleep takes ~60s. No timeout limits on pipeline execution.
+Free tier sleeps after 15 min inactivity. First request after sleep can be slower.
 
-## Enriched Lead Flow
+## Lead Discovery Flow
 
-The pipeline automatically discovers, analyzes, enriches, and pushes leads to HubSpot:
+1. **Organic/local discovery** — Query Serper Places for businesses matching each keyword.
+2. **Paid-ad discovery** — Query SerpApi `engine=google_ads` for paid Google Search ads using the requested location or a city/state inferred from Serper local results.
+3. **Merge** — Deduplicate by destination domain. If the same business appears organically and as an advertiser, `paid_ad` wins and the real paid landing page is preserved.
+4. **Filter** — Remove known franchises.
+5. **Analyze** — Run PageSpeed Insights mobile audits. Paid advertisers are prioritized before organic businesses when `maxDomains` caps the queue.
+6. **Identify Slow Sites** — Apply the configured performance thresholds.
+7. **Enrich** — Extract business/contact information from qualifying sites.
+8. **Save** — Create or update lead records in the database, including `adSource` and the keyword that found the lead.
+9. **Email Report** — Send the lead summary via Resend.
 
-### Pipeline Steps
+### Paid Ads Notes
 
-1. **Search** — Query Serper.dev for businesses matching keywords (paid ads + local results)
-2. **Filter** — Deduplicate by domain and filter out known franchises
-3. **Analyze** — Run PageSpeed Insights mobile audits (45s timeout per site)
-4. **Identify Slow Sites** — Filter sites below performance thresholds
-5. **Enrich** — Extract contact info from slow sites:
-   - Business name (from `<title>`, `og:site_name`, or `<h1>`)
-   - Email addresses (from `mailto:` links and page text)
-   - Phone numbers (from `tel:` links and formatted text)
-   - Contact page URLs (from internal links)
-   - Follows up to 2 contact pages per site (10s timeout each)
-6. **Push to HubSpot** — Create/update contacts with enriched data
-7. **Email Report** — Send summary via Resend
+- Standard Google Search ads returned by SerpApi are marked `paid_ad`.
+- The actual advertiser landing-page URL is sent to PageSpeed Insights.
+- Google Local Services Ads are currently detected in the SerpApi response but skipped because their returned links point to Google Local Services rather than directly to an advertiser website.
+- If `SERPAPI_KEY` is not configured, the pipeline continues with organic/local discovery only and logs that paid-ad discovery was skipped.
 
-### Data Pushed to HubSpot
+## Lead Data
 
-**Contact Properties:**
-- `website` — domain
-- `company` — domain (fallback)
-- `lighthouse_score` — performance score (0-100)
-- `lcp` — Largest Contentful Paint (ms)
-- `cls` — Cumulative Layout Shift
-- `tbt` — Total Blocking Time (ms)
-- `leadkeyword` — search keyword
-- `landing_page_url` — tested URL
-- `ad_source` — `paid_ad` or `local_organic`
-- `pagespeed_tested_at` — ISO timestamp
-- `pagespeed_strategy` — `mobile`
-- `pagespeed_report_url` — PageSpeed Insights report URL
-- `business_name` — extracted business name
-- `contact_page_url` — contact page URL
-- `phone` — normalized phone number
-- `email` — email address
-- `address` — physical address (if available)
-- `source_title` — ad/listing title from search results
-- `enrichment_status` — `enriched`, `failed`, or `skipped`
+Lead records include:
 
-**Deal:**
-- Created for new contacts only
-- Name: `{Business Name} — Score {score}, LCP {lcp}s`
-- Description: Full lead summary with all enrichment data
-- Stage: New Lead
-
-**Note:**
-- Attached to all contacts (new and updated)
-- Contains structured lead summary for audit trail
-
-### Contact Matching Priority
-
-HubSpot contact search tries these fields in order:
-1. **Email** (exact match) — most reliable
-2. **Phone** (exact match) — secondary identifier
-3. **Domain** (token match) — fallback
-
-### Required HubSpot Custom Properties
-
-Create these custom contact properties in HubSpot:
-- `lighthouse_score` (Number)
-- `lcp` (Number)
-- `cls` (Number)
-- `tbt` (Number)
-- `leadkeyword` (Single-line text)
-- `landing_page_url` (Single-line text)
-- `ad_source` (Single-line text)
-- `pagespeed_tested_at` (Single-line text)
-- `pagespeed_strategy` (Single-line text)
-- `pagespeed_report_url` (Single-line text)
-- `business_name` (Single-line text)
-- `contact_page_url` (Single-line text)
-- `source_title` (Single-line text)
-- `enrichment_status` (Single-line text)
+- `domain`
+- `businessName`
+- `landingPageUrl`
+- `keyword`
+- `adSource` — `paid_ad` or `local_organic`
+- PageSpeed metrics
+- email, phone, address, and contact-page data when enrichment succeeds
+- agency/chain flags
+- timestamps and outreach status
