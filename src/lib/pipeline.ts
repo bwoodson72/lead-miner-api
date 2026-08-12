@@ -78,12 +78,14 @@ export async function runLeadSearchPipeline(
     tbt: input.tbt,
   };
 
-  // Step 3: Search Serper for each keyword
-  onProgress?.("searching", "Querying Serper for keywords...");
+  // Step 3: Discover paid advertisers and organic/local businesses.
+  // For an unlocalized keyword, searchAds fans out across configured markets
+  // until it has enough candidates to satisfy maxDomains with some headroom.
+  onProgress?.("searching", "Discovering paid ads and local businesses...");
   const location = input.location || undefined;
   const allAds = await Promise.all(
     keywords.map(async (keyword) => {
-      const results = await searchAds(keyword, location);
+      const results = await searchAds(keyword, location, input.maxDomains);
       const paidCount = results.filter((result) => result.adSource === "paid_ad").length;
       const organicCount = results.length - paidCount;
 
@@ -94,7 +96,6 @@ export async function runLeadSearchPipeline(
           `Found ${paidCount} paid ad(s) and ${organicCount} organic business(es) for keyword "${keyword}"`
         );
       }
-      diagnostics.messages.push(`Used 2 Serper credits for: ${keyword}`);
       return results;
     })
   );
@@ -174,6 +175,10 @@ export async function runLeadSearchPipeline(
     diagnostics.messages.push(
       `Capping analysis to ${input.maxDomains} domains (${filteredQueue.length} unique found); paid advertisers remain first in queue`
     );
+  } else if (filteredQueue.length < input.maxDomains) {
+    diagnostics.messages.push(
+      `Discovery produced ${filteredQueue.length} analyzable domains out of ${input.maxDomains} requested after dedupe and franchise filtering`
+    );
   }
 
   // Step 5: PageSpeed analysis
@@ -206,7 +211,6 @@ export async function runLeadSearchPipeline(
   for (let i = 0; i < slowSites.length; i++) {
     const { entry, result } = slowSites[i]!;
 
-    // Build base lead with PSI and SerpAd metadata
     const baseLead = buildLeadRecord({
       keyword: entry.keyword,
       domain: entry.domain,
@@ -216,13 +220,11 @@ export async function runLeadSearchPipeline(
       serpAd: entry.serpAd,
     });
 
-    // Enrich the lead
     const enrichmentResult = await enrichLeadFromSite({
       url: entry.url,
       existingBusinessName: baseLead.businessName,
     });
 
-    // Track diagnostics
     if (enrichmentResult.enrichmentStatus === "enriched") {
       diagnostics.leadsEnriched++;
       if (enrichmentResult.email) diagnostics.emailsFound++;
@@ -232,7 +234,6 @@ export async function runLeadSearchPipeline(
       diagnostics.messages.push(`Enrichment failed for ${entry.domain}: ${enrichmentResult.enrichmentNotes}`);
     }
 
-    // Merge enrichment results into lead
     const enrichedLead: LeadRecord = {
       ...baseLead,
       ...(enrichmentResult.businessName && { businessName: enrichmentResult.businessName }),
@@ -249,7 +250,6 @@ export async function runLeadSearchPipeline(
     };
 
     leads.push(enrichedLead);
-
     onProgress?.("enriching", `${i + 1} of ${slowSites.length} sites enriched`);
   }
 
