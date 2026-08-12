@@ -47,6 +47,8 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         chainReason: lead.chainReason ?? null,
       },
       update: {
+        keyword: lead.keyword,
+        adSource: lead.adSource,
         lighthouseScore: lead.performanceScore,
         lcp: Math.round(lead.lcp),
         cls: lead.cls ?? undefined,
