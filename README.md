@@ -1,6 +1,6 @@
 # Lead Miner API
 
-Express API server that discovers businesses with slow websites by searching Google for local businesses via SerpApi, analyzing their mobile performance with PageSpeed Insights, and emailing a lead report.
+Express API server that discovers businesses with slow websites by using Serper for local-business discovery and SerpApi for paid Google Ads discovery, analyzing their mobile performance with PageSpeed Insights, and emailing a lead report.
 
 Pairs with a Next.js frontend. Deploy free on Render.
 
@@ -13,7 +13,8 @@ npm run dev
 
 ## Environment Variables
 
-- SERPER_API_KEY — from serper.dev (free tier: 2,500 searches, no credit card required)
+- SERPER_API_KEY — from serper.dev; used for local/organic business discovery
+- SERPAPI_KEY — from serpapi.com; used for paid Google Ads discovery
 - PAGESPEED_API_KEY — from Google Cloud Console
 - RESEND_API_KEY — from resend.com
 - REPORT_EMAIL — default recipient email
@@ -34,7 +35,7 @@ npm run dev
 2. Create a Web Service on render.com
 3. Build Command: npm install && npm run build
 4. Start Command: npm run start
-5. Add environment variables
+5. Add environment variables, including SERPER_API_KEY and SERPAPI_KEY
 6. Set ALLOWED_ORIGINS to your frontend URL
 
 Free tier sleeps after 15 min inactivity. First request after sleep takes ~60s. No timeout limits on pipeline execution.
@@ -45,7 +46,7 @@ The pipeline automatically discovers, analyzes, enriches, and pushes leads to Hu
 
 ### Pipeline Steps
 
-1. **Search** — Query Serper.dev for businesses matching keywords (paid ads + local results)
+1. **Search** — Query Serper Places for local businesses and SerpApi `google_ads` for paid Google Search ads. Paid ads preserve the advertiser's actual landing-page URL; when a business appears in both sources, `paid_ad` wins.
 2. **Filter** — Deduplicate by domain and filter out known franchises
 3. **Analyze** — Run PageSpeed Insights mobile audits (45s timeout per site)
 4. **Identify Slow Sites** — Filter sites below performance thresholds
@@ -57,6 +58,13 @@ The pipeline automatically discovers, analyzes, enriches, and pushes leads to Hu
    - Follows up to 2 contact pages per site (10s timeout each)
 6. **Push to HubSpot** — Create/update contacts with enriched data
 7. **Email Report** — Send summary via Resend
+
+### Paid Ad Notes
+
+- Standard Google Search ads returned by SerpApi are marked `paid_ad`.
+- The actual ad landing page is tested with PageSpeed Insights.
+- Google Local Services Ads are currently skipped because the returned links point to Google Local Services rather than directly to the advertiser website.
+- If SERPAPI_KEY is not configured, the pipeline continues with local/organic discovery only.
 
 ### Data Pushed to HubSpot
 
