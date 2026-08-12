@@ -12,7 +12,11 @@ import { enrichLeadFromSite } from "./enrichment.js";
 type Diagnostics = {
   keywordsParsed: number;
   adsFound: number;
+  paidAdsFound: number;
+  organicBusinessesFound: number;
   uniqueDomains: number;
+  paidDomainsQueued: number;
+  organicDomainsQueued: number;
   franchisesFiltered: number;
   pageSpeedResults: number;
   pageSpeedFailures: number;
@@ -39,7 +43,11 @@ export async function runLeadSearchPipeline(
   const diagnostics: Diagnostics = {
     keywordsParsed: 0,
     adsFound: 0,
+    paidAdsFound: 0,
+    organicBusinessesFound: 0,
     uniqueDomains: 0,
+    paidDomainsQueued: 0,
+    organicDomainsQueued: 0,
     franchisesFiltered: 0,
     pageSpeedResults: 0,
     pageSpeedFailures: 0,
@@ -70,30 +78,48 @@ export async function runLeadSearchPipeline(
     tbt: input.tbt,
   };
 
-  // Step 3: Search ads for each keyword
-  onProgress?.("searching", "Querying SerpApi for keywords...");
+  // Step 3: Search Serper for each keyword
+  onProgress?.("searching", "Querying Serper for keywords...");
   const location = input.location || undefined;
   const allAds = await Promise.all(
     keywords.map(async (keyword) => {
-      const ads = await searchAds(keyword, location);
-      if (ads.length === 0) {
-        diagnostics.messages.push(`Warning: No ads found for keyword "${keyword}"`);
+      const results = await searchAds(keyword, location);
+      const paidCount = results.filter((result) => result.adSource === "paid_ad").length;
+      const organicCount = results.length - paidCount;
+
+      if (results.length === 0) {
+        diagnostics.messages.push(`Warning: No businesses found for keyword "${keyword}"`);
       } else {
-        diagnostics.messages.push(`Found ${ads.length} ad(s) for keyword "${keyword}"`);
+        diagnostics.messages.push(
+          `Found ${paidCount} paid ad(s) and ${organicCount} organic business(es) for keyword "${keyword}"`
+        );
       }
       diagnostics.messages.push(`Used 2 Serper credits for: ${keyword}`);
-      return ads;
+      return results;
     })
   );
 
   const flatAds = allAds.flat();
   diagnostics.adsFound = flatAds.length;
-  onProgress?.("searching", "Found " + flatAds.length + " businesses across " + keywords.length + " keywords");
+  diagnostics.paidAdsFound = flatAds.filter((result) => result.adSource === "paid_ad").length;
+  diagnostics.organicBusinessesFound = flatAds.length - diagnostics.paidAdsFound;
+  onProgress?.(
+    "searching",
+    `Found ${diagnostics.paidAdsFound} paid ads and ${diagnostics.organicBusinessesFound} organic businesses across ${keywords.length} keywords`
+  );
 
-  // Step 4: Normalize URLs, extract domains, deduplicate by domain
-  type QueueEntry = { url: string; domain: string; keyword: string; adSource: "paid_ad" | "local_organic"; serpAd: SerpAd };
-  const seenDomains = new Set<string>();
-  const queue: QueueEntry[] = [];
+  // Step 4: Normalize URLs, extract domains, and deduplicate by domain.
+  // If a domain is ever seen as a paid advertiser, preserve that paid result even
+  // when the same domain was discovered organically for another keyword first.
+  type QueueEntry = {
+    url: string;
+    domain: string;
+    keyword: string;
+    adSource: "paid_ad" | "local_organic";
+    serpAd: SerpAd;
+  };
+
+  const byDomain = new Map<string, QueueEntry>();
 
   for (const ad of flatAds) {
     let normalizedUrl: string;
@@ -106,13 +132,33 @@ export async function runLeadSearchPipeline(
       continue;
     }
 
-    if (!seenDomains.has(domain)) {
-      seenDomains.add(domain);
-      queue.push({ url: normalizedUrl, domain, keyword: ad.keyword, adSource: ad.adSource, serpAd: ad });
+    const nextEntry: QueueEntry = {
+      url: normalizedUrl,
+      domain,
+      keyword: ad.keyword,
+      adSource: ad.adSource,
+      serpAd: ad,
+    };
+
+    const existing = byDomain.get(domain);
+    if (!existing || (nextEntry.adSource === "paid_ad" && existing.adSource === "local_organic")) {
+      byDomain.set(domain, nextEntry);
     }
   }
 
+  // Paid advertisers are the highest-value prospects, so analyze them before
+  // organic businesses when maxDomains caps the PageSpeed queue.
+  const queue = Array.from(byDomain.values()).sort((a, b) => {
+    if (a.adSource === b.adSource) return 0;
+    return a.adSource === "paid_ad" ? -1 : 1;
+  });
+
   diagnostics.uniqueDomains = queue.length;
+  diagnostics.paidDomainsQueued = queue.filter((entry) => entry.adSource === "paid_ad").length;
+  diagnostics.organicDomainsQueued = queue.length - diagnostics.paidDomainsQueued;
+  diagnostics.messages.push(
+    `Unique domains queued: ${diagnostics.paidDomainsQueued} paid, ${diagnostics.organicDomainsQueued} organic`
+  );
 
   // Step 4b: Filter out franchise domains
   const filteredQueue = queue.filter((entry) => {
@@ -126,7 +172,7 @@ export async function runLeadSearchPipeline(
 
   if (filteredQueue.length > input.maxDomains) {
     diagnostics.messages.push(
-      `Capping analysis to ${input.maxDomains} domains (${filteredQueue.length} unique found)`
+      `Capping analysis to ${input.maxDomains} domains (${filteredQueue.length} unique found); paid advertisers remain first in queue`
     );
   }
 
