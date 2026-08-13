@@ -249,6 +249,54 @@ async function querySerpApiAds(
   return results;
 }
 
+async function resolveSerpApiMapLl(location: string): Promise<string | undefined> {
+  const params = new URLSearchParams({ q: location, limit: "10" });
+  const response = await fetch(
+    `https://serpapi.com/locations.json?${params.toString()}`
+  );
+
+  if (!response.ok) {
+    console.error(
+      `[SerpApi] Locations error ${response.status} for ${location}: ${await response.text()}`
+    );
+    return undefined;
+  }
+
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) return undefined;
+
+  const candidates = (data as Record<string, unknown>[]).filter((candidate) => {
+    const gps = candidate["gps"];
+    return Array.isArray(gps) && gps.length >= 2;
+  });
+
+  const selected =
+    candidates.find(
+      (candidate) =>
+        candidate["country_code"] === "US" && candidate["target_type"] === "City"
+    ) ??
+    candidates.find((candidate) => candidate["country_code"] === "US") ??
+    candidates[0];
+
+  if (!selected) {
+    console.error(`[SerpApi] No GPS location found for ${location}`);
+    return undefined;
+  }
+
+  const gps = selected["gps"] as unknown[];
+  const longitude = gps[0];
+  const latitude = gps[1];
+
+  if (typeof longitude !== "number" || typeof latitude !== "number") {
+    console.error(`[SerpApi] Invalid GPS location for ${location}`);
+    return undefined;
+  }
+
+  const ll = `@${latitude},${longitude},13z`;
+  console.log(`[SerpApi] Resolved ${location} to ${ll}`);
+  return ll;
+}
+
 async function querySerpApiMapBusinesses(
   apiKey: string,
   keyword: string,
@@ -256,13 +304,16 @@ async function querySerpApiMapBusinesses(
   targetDomains: number
 ): Promise<SerpAd[]> {
   const byDomain = new Map<string, SerpAd>();
+  const ll = await resolveSerpApiMapLl(market.serpApiLocation);
+
+  if (!ll) return [];
+
   for (let start = 0; start <= 100 && byDomain.size < targetDomains; start += 20) {
     const params = new URLSearchParams({
       engine: "google_maps",
       type: "search",
       q: keyword,
-      location: market.serpApiLocation,
-      z: "13",
+      ll,
       hl: "en",
       api_key: apiKey,
       start: String(start),
