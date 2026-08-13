@@ -1,4 +1,8 @@
 import { searchAds, type SerpAd } from "./serpapi.js";
+import {
+  discoverLocalizedCandidates,
+  resolveLocalizedSearchSpec,
+} from "./localized-discovery.js";
 import { normalizeUrl, extractRootDomain } from "./normalize-url.js";
 import { analyzeUrlsWithRateLimit, type PageSpeedResult } from "./pagespeed.js";
 import { isSlowSite, buildLeadRecord } from "./filters.js";
@@ -79,18 +83,26 @@ export async function runLeadSearchPipeline(
   };
 
   // Step 3: Discover paid advertisers and organic/local businesses.
-  // For an unlocalized keyword, searchAds fans out across configured markets
-  // until it has enough candidates to satisfy maxDomains with some headroom.
+  // Localized searches use related-query fan-out and dedupe instead of relying
+  // on pagination from one local SERP. Broad searches keep the multi-market flow.
   onProgress?.("searching", "Discovering paid ads and local businesses...");
   const location = input.location || undefined;
   const allAds = await Promise.all(
     keywords.map(async (keyword) => {
-      const results = await searchAds(keyword, location, input.maxDomains);
-      const paidCount = results.filter((result) => result.adSource === "paid_ad").length;
+      const localSpec = resolveLocalizedSearchSpec(keyword, location);
+      const results = localSpec
+        ? await discoverLocalizedCandidates(keyword, localSpec, input.maxDomains)
+        : await searchAds(keyword, undefined, input.maxDomains);
+
+      const paidCount = results.filter(
+        (result) => result.adSource === "paid_ad"
+      ).length;
       const organicCount = results.length - paidCount;
 
       if (results.length === 0) {
-        diagnostics.messages.push(`Warning: No businesses found for keyword "${keyword}"`);
+        diagnostics.messages.push(
+          `Warning: No businesses found for keyword "${keyword}"`
+        );
       } else {
         diagnostics.messages.push(
           `Found ${paidCount} paid ad(s) and ${organicCount} organic business(es) for keyword "${keyword}"`
@@ -102,8 +114,11 @@ export async function runLeadSearchPipeline(
 
   const flatAds = allAds.flat();
   diagnostics.adsFound = flatAds.length;
-  diagnostics.paidAdsFound = flatAds.filter((result) => result.adSource === "paid_ad").length;
-  diagnostics.organicBusinessesFound = flatAds.length - diagnostics.paidAdsFound;
+  diagnostics.paidAdsFound = flatAds.filter(
+    (result) => result.adSource === "paid_ad"
+  ).length;
+  diagnostics.organicBusinessesFound =
+    flatAds.length - diagnostics.paidAdsFound;
   onProgress?.(
     "searching",
     `Found ${diagnostics.paidAdsFound} paid ads and ${diagnostics.organicBusinessesFound} organic businesses across ${keywords.length} keywords`
@@ -142,7 +157,11 @@ export async function runLeadSearchPipeline(
     };
 
     const existing = byDomain.get(domain);
-    if (!existing || (nextEntry.adSource === "paid_ad" && existing.adSource === "local_organic")) {
+    if (
+      !existing ||
+      (nextEntry.adSource === "paid_ad" &&
+        existing.adSource === "local_organic")
+    ) {
       byDomain.set(domain, nextEntry);
     }
   }
@@ -155,8 +174,11 @@ export async function runLeadSearchPipeline(
   });
 
   diagnostics.uniqueDomains = queue.length;
-  diagnostics.paidDomainsQueued = queue.filter((entry) => entry.adSource === "paid_ad").length;
-  diagnostics.organicDomainsQueued = queue.length - diagnostics.paidDomainsQueued;
+  diagnostics.paidDomainsQueued = queue.filter(
+    (entry) => entry.adSource === "paid_ad"
+  ).length;
+  diagnostics.organicDomainsQueued =
+    queue.length - diagnostics.paidDomainsQueued;
   diagnostics.messages.push(
     `Unique domains queued: ${diagnostics.paidDomainsQueued} paid, ${diagnostics.organicDomainsQueued} organic`
   );
@@ -183,12 +205,24 @@ export async function runLeadSearchPipeline(
 
   // Step 5: PageSpeed analysis
   const total = Math.min(filteredQueue.length, input.maxDomains ?? 20);
-  onProgress?.("analyzing", "Running PageSpeed analysis on " + total + " domains...");
-  const pageSpeedMap = await analyzeUrlsWithRateLimit(filteredQueue, input.maxDomains ?? 20, 3, (completed, tot) => {
-    onProgress?.("analyzing", completed + " of " + tot + " domains analyzed");
-  });
+  onProgress?.(
+    "analyzing",
+    "Running PageSpeed analysis on " + total + " domains..."
+  );
+  const pageSpeedMap = await analyzeUrlsWithRateLimit(
+    filteredQueue,
+    input.maxDomains ?? 20,
+    3,
+    (completed, tot) => {
+      onProgress?.(
+        "analyzing",
+        completed + " of " + tot + " domains analyzed"
+      );
+    }
+  );
   diagnostics.pageSpeedResults = pageSpeedMap.size;
-  diagnostics.pageSpeedFailures = Math.min(filteredQueue.length, input.maxDomains) - pageSpeedMap.size;
+  diagnostics.pageSpeedFailures =
+    Math.min(filteredQueue.length, input.maxDomains) - pageSpeedMap.size;
 
   // Step 6: Filter slow sites and build lead records
   const slowSites: Array<{ entry: QueueEntry; result: PageSpeedResult }> = [];
@@ -231,26 +265,43 @@ export async function runLeadSearchPipeline(
       if (enrichmentResult.phone) diagnostics.phonesFound++;
     } else if (enrichmentResult.enrichmentStatus === "failed") {
       diagnostics.enrichmentFailures++;
-      diagnostics.messages.push(`Enrichment failed for ${entry.domain}: ${enrichmentResult.enrichmentNotes}`);
+      diagnostics.messages.push(
+        `Enrichment failed for ${entry.domain}: ${enrichmentResult.enrichmentNotes}`
+      );
     }
 
     const enrichedLead: LeadRecord = {
       ...baseLead,
-      ...(enrichmentResult.businessName && { businessName: enrichmentResult.businessName }),
-      ...(enrichmentResult.contactPageUrl && { contactPageUrl: enrichmentResult.contactPageUrl }),
+      ...(enrichmentResult.businessName && {
+        businessName: enrichmentResult.businessName,
+      }),
+      ...(enrichmentResult.contactPageUrl && {
+        contactPageUrl: enrichmentResult.contactPageUrl,
+      }),
       ...(enrichmentResult.email && { email: enrichmentResult.email }),
       ...(enrichmentResult.phone && { phone: enrichmentResult.phone }),
       ...(enrichmentResult.address && { address: enrichmentResult.address }),
       enrichmentStatus: enrichmentResult.enrichmentStatus,
       enrichmentNotes: enrichmentResult.enrichmentNotes,
-      ...(enrichmentResult.isAgencyManaged !== undefined && { isAgencyManaged: enrichmentResult.isAgencyManaged }),
-      ...(enrichmentResult.agencyName && { agencyName: enrichmentResult.agencyName }),
-      ...(enrichmentResult.isNationalChain !== undefined && { isNationalChain: enrichmentResult.isNationalChain }),
-      ...(enrichmentResult.chainReason && { chainReason: enrichmentResult.chainReason }),
+      ...(enrichmentResult.isAgencyManaged !== undefined && {
+        isAgencyManaged: enrichmentResult.isAgencyManaged,
+      }),
+      ...(enrichmentResult.agencyName && {
+        agencyName: enrichmentResult.agencyName,
+      }),
+      ...(enrichmentResult.isNationalChain !== undefined && {
+        isNationalChain: enrichmentResult.isNationalChain,
+      }),
+      ...(enrichmentResult.chainReason && {
+        chainReason: enrichmentResult.chainReason,
+      }),
     };
 
     leads.push(enrichedLead);
-    onProgress?.("enriching", `${i + 1} of ${slowSites.length} sites enriched`);
+    onProgress?.(
+      "enriching",
+      `${i + 1} of ${slowSites.length} sites enriched`
+    );
   }
 
   diagnostics.messages.push(
@@ -274,7 +325,9 @@ export async function runLeadSearchPipeline(
   const emailResult = await sendReport(leads, keywords, input.email);
   diagnostics.emailSent = emailResult.success;
   if (!emailResult.success) {
-    diagnostics.messages.push(`Email failed: ${emailResult.error ?? "unknown error"}`);
+    diagnostics.messages.push(
+      `Email failed: ${emailResult.error ?? "unknown error"}`
+    );
   }
 
   onProgress?.("complete", "Done — " + leads.length + " leads found");
