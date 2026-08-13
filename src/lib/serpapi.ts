@@ -7,10 +7,6 @@ type SearchMarket = {
   serpApiLocation: string;
 };
 
-// Broad searches such as "roofer" are local-intent queries in Google. Rather
-// than letting one arbitrary local result define the whole run, fan broad
-// searches across the markets we actually prospect. The order keeps the first
-// results close to Granbury/DFW, then expands across Texas as needed.
 const BROAD_SEARCH_MARKETS: SearchMarket[] = [
   { queryLabel: "Granbury TX", serpApiLocation: "Granbury, Texas, United States" },
   { queryLabel: "Fort Worth TX", serpApiLocation: "Fort Worth, Texas, United States" },
@@ -110,6 +106,23 @@ function marketFromKeyword(keyword: string): SearchMarket | undefined {
     const city = market.queryLabel.toLowerCase().replace(/\s+tx$/, "");
     return normalized.includes(city);
   });
+}
+
+function normalizeLocation(location: string): string {
+  const trimmed = location.trim();
+  if (/united states$/i.test(trimmed)) return trimmed;
+  return `${trimmed}, United States`;
+}
+
+function parseInlineLocation(keyword: string): { query: string; location?: string } {
+  const commaIndex = keyword.indexOf(",");
+  if (commaIndex < 0) return { query: keyword.trim() };
+
+  const query = keyword.slice(0, commaIndex).trim();
+  const location = keyword.slice(commaIndex + 1).trim();
+
+  if (!query || !location) return { query: keyword.trim() };
+  return { query, location: normalizeLocation(location) };
 }
 
 function mergeByDomain(target: Map<string, SerpAd>, results: SerpAd[]): void {
@@ -236,15 +249,85 @@ async function querySerpApiAds(
   return results;
 }
 
+async function querySerpApiLocalBusinesses(
+  apiKey: string,
+  keyword: string,
+  market: SearchMarket,
+  targetDomains: number
+): Promise<SerpAd[]> {
+  const byDomain = new Map<string, SerpAd>();
+
+  for (let start = 0; start <= 100 && byDomain.size < targetDomains; start += 20) {
+    const params = new URLSearchParams({
+      engine: "google_local",
+      q: keyword,
+      location: market.serpApiLocation,
+      hl: "en",
+      gl: "us",
+      device: "desktop",
+      api_key: apiKey,
+    });
+    if (start > 0) params.set("start", String(start));
+
+    const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`);
+    if (!response.ok) {
+      console.error(
+        `[SerpApi] Local error ${response.status} for ${keyword} @ ${market.serpApiLocation}: ${await response.text()}`
+      );
+      break;
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    if (typeof data["error"] === "string") {
+      console.error(`[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${data["error"]}`);
+      break;
+    }
+
+    const localResults = Array.isArray(data["local_results"])
+      ? (data["local_results"] as Record<string, unknown>[])
+      : [];
+
+    for (const place of localResults) {
+      const links = place["links"] as Record<string, unknown> | undefined;
+      const website = typeof links?.["website"] === "string"
+        ? (links["website"] as string)
+        : undefined;
+
+      const entry = buildResult(
+        keyword,
+        "local_organic",
+        place["title"] as string | undefined,
+        website,
+        place["title"] as string | undefined,
+        undefined,
+        place["address"] as string | undefined
+      );
+
+      if (!entry) continue;
+      const domain = domainFromUrl(entry.landingPageUrl);
+      if (domain) byDomain.set(domain, entry);
+    }
+
+    console.log(
+      `[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after offset ${start}`
+    );
+
+    const pagination = data["serpapi_pagination"] as Record<string, unknown> | undefined;
+    if (localResults.length === 0 || typeof pagination?.["next"] !== "string") break;
+  }
+
+  return Array.from(byDomain.values());
+}
+
 function explicitMarket(location: string): SearchMarket {
-  const queryLabel = location
+  const normalizedLocation = normalizeLocation(location);
+  const queryLabel = normalizedLocation
     .replace(/,?\s*United States$/i, "")
-    .replace(/,?\s*Texas$/i, " TX")
     .replace(/,/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  return { queryLabel, serpApiLocation: location.trim() };
+  return { queryLabel, serpApiLocation: normalizedLocation };
 }
 
 async function searchOneMarket(
@@ -262,6 +345,28 @@ async function searchOneMarket(
   return [...paid, ...organic];
 }
 
+async function searchLocalizedMarket(
+  keyword: string,
+  market: SearchMarket,
+  serperKey: string,
+  serpApiKey: string | undefined,
+  discoveryTarget: number
+): Promise<SerpAd[]> {
+  if (!serpApiKey) {
+    console.warn(
+      `[SerpApi] SERPAPI_KEY missing; localized discovery falls back to one Serper Places page`
+    );
+    return searchOneMarket(keyword, market, serperKey, undefined, false);
+  }
+
+  const [localBusinesses, paid] = await Promise.all([
+    querySerpApiLocalBusinesses(serpApiKey, keyword, market, discoveryTarget),
+    querySerpApiAds(serpApiKey, keyword, market),
+  ]);
+
+  return [...paid, ...localBusinesses];
+}
+
 export async function searchAds(
   keyword: string,
   location?: string,
@@ -270,43 +375,47 @@ export async function searchAds(
   try {
     const { env } = await import("./env.js");
     const byDomain = new Map<string, SerpAd>();
+    const discoveryTarget =
+      targetDomains + Math.max(20, Math.ceil(targetDomains * 0.25));
+
+    const inline = parseInlineLocation(keyword);
+    const searchKeyword = inline.query;
+    const requestedLocation = location?.trim() || inline.location;
 
     if (!env.SERPAPI_KEY) {
       console.warn(`[SerpApi] SERPAPI_KEY missing; paid ads will be skipped`);
     }
 
-    if (location?.trim()) {
+    if (requestedLocation) {
+      const market = explicitMarket(requestedLocation);
       mergeByDomain(
         byDomain,
-        await searchOneMarket(
-          keyword,
-          explicitMarket(location),
+        await searchLocalizedMarket(
+          searchKeyword,
+          market,
           env.SERPER_API_KEY,
           env.SERPAPI_KEY,
-          true
+          discoveryTarget
         )
       );
     } else {
-      const embeddedMarket = marketFromKeyword(keyword);
+      const embeddedMarket = marketFromKeyword(searchKeyword);
 
       if (embeddedMarket) {
         mergeByDomain(
           byDomain,
-          await searchOneMarket(
-            keyword,
+          await searchLocalizedMarket(
+            searchKeyword,
             embeddedMarket,
             env.SERPER_API_KEY,
             env.SERPAPI_KEY,
-            false
+            discoveryTarget
           )
         );
       } else {
-        const discoveryTarget =
-          targetDomains + Math.max(20, Math.ceil(targetDomains * 0.25));
-
         for (const market of BROAD_SEARCH_MARKETS) {
           const marketResults = await searchOneMarket(
-            keyword,
+            searchKeyword,
             market,
             env.SERPER_API_KEY,
             env.SERPAPI_KEY,
@@ -315,7 +424,7 @@ export async function searchAds(
           mergeByDomain(byDomain, marketResults);
 
           console.log(
-            `[Search] broad ${keyword}: ${byDomain.size}/${discoveryTarget} unique domains after ${market.queryLabel}`
+            `[Search] broad ${searchKeyword}: ${byDomain.size}/${discoveryTarget} unique domains after ${market.queryLabel}`
           );
 
           if (byDomain.size >= discoveryTarget) break;
