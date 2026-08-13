@@ -256,21 +256,21 @@ async function querySerpApiMapBusinesses(
   targetDomains: number
 ): Promise<SerpAd[]> {
   const byDomain = new Map<string, SerpAd>();
-  const params = new URLSearchParams({
-    engine: "google_maps",
-    type: "search",
-    q: keyword,
-    location: market.serpApiLocation,
-    z: "13",
-    hl: "en",
-    api_key: apiKey,
-  });
+  for (let start = 0; start <= 100 && byDomain.size < targetDomains; start += 20) {
+    const params = new URLSearchParams({
+      engine: "google_maps",
+      type: "search",
+      q: keyword,
+      location: market.serpApiLocation,
+      z: "13",
+      hl: "en",
+      api_key: apiKey,
+      start: String(start),
+    });
 
-  let nextUrl: string | undefined =
-    `https://serpapi.com/search.json?${params.toString()}`;
-
-  for (let page = 0; page < 6 && byDomain.size < targetDomains && nextUrl; page++) {
-    const response = await fetch(nextUrl);
+    const response = await fetch(
+      `https://serpapi.com/search.json?${params.toString()}`
+    );
 
     if (!response.ok) {
       console.error(
@@ -316,22 +316,10 @@ async function querySerpApiMapBusinesses(
     }
 
     console.log(
-      `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after page ${page + 1}`
+      `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after offset ${start}`
     );
 
-    const pagination = data["serpapi_pagination"] as
-      | Record<string, unknown>
-      | undefined;
-    const next =
-      typeof pagination?.["next"] === "string"
-        ? (pagination["next"] as string)
-        : undefined;
-
-    if (localResults.length === 0 || !next) break;
-
-    const nextPageUrl = new URL(next);
-    nextPageUrl.searchParams.set("api_key", apiKey);
-    nextUrl = nextPageUrl.toString();
+    if (localResults.length === 0) break;
   }
 
   return Array.from(byDomain.values());
