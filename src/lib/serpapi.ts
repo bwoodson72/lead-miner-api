@@ -249,37 +249,41 @@ async function querySerpApiAds(
   return results;
 }
 
-async function querySerpApiLocalBusinesses(
+async function querySerpApiMapBusinesses(
   apiKey: string,
   keyword: string,
   market: SearchMarket,
   targetDomains: number
 ): Promise<SerpAd[]> {
   const byDomain = new Map<string, SerpAd>();
+  const params = new URLSearchParams({
+    engine: "google_maps",
+    type: "search",
+    q: keyword,
+    location: market.serpApiLocation,
+    z: "13",
+    hl: "en",
+    api_key: apiKey,
+  });
 
-  for (let start = 0; start <= 100 && byDomain.size < targetDomains; start += 20) {
-    const params = new URLSearchParams({
-      engine: "google_local",
-      q: keyword,
-      location: market.serpApiLocation,
-      hl: "en",
-      gl: "us",
-      device: "desktop",
-      api_key: apiKey,
-    });
-    if (start > 0) params.set("start", String(start));
+  let nextUrl: string | undefined =
+    `https://serpapi.com/search.json?${params.toString()}`;
 
-    const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`);
+  for (let page = 0; page < 6 && byDomain.size < targetDomains && nextUrl; page++) {
+    const response = await fetch(nextUrl);
+
     if (!response.ok) {
       console.error(
-        `[SerpApi] Local error ${response.status} for ${keyword} @ ${market.serpApiLocation}: ${await response.text()}`
+        `[SerpApi] Maps error ${response.status} for ${keyword} @ ${market.serpApiLocation}: ${await response.text()}`
       );
       break;
     }
 
     const data = (await response.json()) as Record<string, unknown>;
     if (typeof data["error"] === "string") {
-      console.error(`[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${data["error"]}`);
+      console.error(
+        `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${data["error"]}`
+      );
       break;
     }
 
@@ -289,9 +293,12 @@ async function querySerpApiLocalBusinesses(
 
     for (const place of localResults) {
       const links = place["links"] as Record<string, unknown> | undefined;
-      const website = typeof links?.["website"] === "string"
-        ? (links["website"] as string)
-        : undefined;
+      const website =
+        typeof place["website"] === "string"
+          ? (place["website"] as string)
+          : typeof links?.["website"] === "string"
+            ? (links["website"] as string)
+            : undefined;
 
       const entry = buildResult(
         keyword,
@@ -299,7 +306,7 @@ async function querySerpApiLocalBusinesses(
         place["title"] as string | undefined,
         website,
         place["title"] as string | undefined,
-        undefined,
+        place["phone"] as string | undefined,
         place["address"] as string | undefined
       );
 
@@ -309,11 +316,22 @@ async function querySerpApiLocalBusinesses(
     }
 
     console.log(
-      `[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after offset ${start}`
+      `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after page ${page + 1}`
     );
 
-    const pagination = data["serpapi_pagination"] as Record<string, unknown> | undefined;
-    if (localResults.length === 0 || typeof pagination?.["next"] !== "string") break;
+    const pagination = data["serpapi_pagination"] as
+      | Record<string, unknown>
+      | undefined;
+    const next =
+      typeof pagination?.["next"] === "string"
+        ? (pagination["next"] as string)
+        : undefined;
+
+    if (localResults.length === 0 || !next) break;
+
+    const nextPageUrl = new URL(next);
+    nextPageUrl.searchParams.set("api_key", apiKey);
+    nextUrl = nextPageUrl.toString();
   }
 
   return Array.from(byDomain.values());
@@ -350,21 +368,23 @@ async function searchLocalizedMarket(
   market: SearchMarket,
   serperKey: string,
   serpApiKey: string | undefined,
-  discoveryTarget: number
+  discoveryTarget: number,
+  appendMarket = true
 ): Promise<SerpAd[]> {
   if (!serpApiKey) {
     console.warn(
-      `[SerpApi] SERPAPI_KEY missing; localized discovery falls back to one Serper Places page`
+      `[SerpApi] SERPAPI_KEY missing; localized discovery falls back to Serper Places`
     );
-    return searchOneMarket(keyword, market, serperKey, undefined, false);
+    return searchOneMarket(keyword, market, serperKey, undefined, appendMarket);
   }
 
-  const [localBusinesses, paid] = await Promise.all([
-    querySerpApiLocalBusinesses(serpApiKey, keyword, market, discoveryTarget),
+  const [serperBusinesses, mapBusinesses, paid] = await Promise.all([
+    querySerperPlaces(serperKey, keyword, market, appendMarket),
+    querySerpApiMapBusinesses(serpApiKey, keyword, market, discoveryTarget),
     querySerpApiAds(serpApiKey, keyword, market),
   ]);
 
-  return [...paid, ...localBusinesses];
+  return [...paid, ...mapBusinesses, ...serperBusinesses];
 }
 
 export async function searchAds(
@@ -395,7 +415,8 @@ export async function searchAds(
           market,
           env.SERPER_API_KEY,
           env.SERPAPI_KEY,
-          discoveryTarget
+          discoveryTarget,
+          true
         )
       );
     } else {
@@ -409,7 +430,8 @@ export async function searchAds(
             embeddedMarket,
             env.SERPER_API_KEY,
             env.SERPAPI_KEY,
-            discoveryTarget
+            discoveryTarget,
+            false
           )
         );
       } else {
