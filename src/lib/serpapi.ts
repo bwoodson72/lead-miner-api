@@ -249,83 +249,32 @@ async function querySerpApiAds(
   return results;
 }
 
-async function resolveSerpApiMapLl(location: string): Promise<string | undefined> {
-  const params = new URLSearchParams({ q: location, limit: "10" });
-  const response = await fetch(
-    `https://serpapi.com/locations.json?${params.toString()}`
-  );
-
-  if (!response.ok) {
-    console.error(
-      `[SerpApi] Locations error ${response.status} for ${location}: ${await response.text()}`
-    );
-    return undefined;
-  }
-
-  const data = (await response.json()) as unknown;
-  if (!Array.isArray(data)) return undefined;
-
-  const candidates = (data as Record<string, unknown>[]).filter((candidate) => {
-    const gps = candidate["gps"];
-    return Array.isArray(gps) && gps.length >= 2;
-  });
-
-  const selected =
-    candidates.find(
-      (candidate) =>
-        candidate["country_code"] === "US" && candidate["target_type"] === "City"
-    ) ??
-    candidates.find((candidate) => candidate["country_code"] === "US") ??
-    candidates[0];
-
-  if (!selected) {
-    console.error(`[SerpApi] No GPS location found for ${location}`);
-    return undefined;
-  }
-
-  const gps = selected["gps"] as unknown[];
-  const longitude = gps[0];
-  const latitude = gps[1];
-
-  if (typeof longitude !== "number" || typeof latitude !== "number") {
-    console.error(`[SerpApi] Invalid GPS location for ${location}`);
-    return undefined;
-  }
-
-  const ll = `@${latitude},${longitude},13z`;
-  console.log(`[SerpApi] Resolved ${location} to ${ll}`);
-  return ll;
-}
-
-async function querySerpApiMapBusinesses(
+async function querySerpApiLocalBusinesses(
   apiKey: string,
   keyword: string,
   market: SearchMarket,
   targetDomains: number
 ): Promise<SerpAd[]> {
   const byDomain = new Map<string, SerpAd>();
-  const ll = await resolveSerpApiMapLl(market.serpApiLocation);
+  const params = new URLSearchParams({
+    engine: "google_local",
+    q: keyword,
+    location: market.serpApiLocation,
+    gl: "us",
+    hl: "en",
+    device: "desktop",
+    api_key: apiKey,
+  });
 
-  if (!ll) return [];
+  let nextUrl: string | undefined =
+    `https://serpapi.com/search.json?${params.toString()}`;
 
-  for (let start = 0; start <= 100 && byDomain.size < targetDomains; start += 20) {
-    const params = new URLSearchParams({
-      engine: "google_maps",
-      type: "search",
-      q: keyword,
-      ll,
-      hl: "en",
-      api_key: apiKey,
-      start: String(start),
-    });
-
-    const response = await fetch(
-      `https://serpapi.com/search.json?${params.toString()}`
-    );
+  for (let page = 0; page < 6 && byDomain.size < targetDomains && nextUrl; page++) {
+    const response = await fetch(nextUrl);
 
     if (!response.ok) {
       console.error(
-        `[SerpApi] Maps error ${response.status} for ${keyword} @ ${market.serpApiLocation}: ${await response.text()}`
+        `[SerpApi] Local error ${response.status} for ${keyword} @ ${market.serpApiLocation}: ${await response.text()}`
       );
       break;
     }
@@ -333,7 +282,7 @@ async function querySerpApiMapBusinesses(
     const data = (await response.json()) as Record<string, unknown>;
     if (typeof data["error"] === "string") {
       console.error(
-        `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${data["error"]}`
+        `[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${data["error"]}`
       );
       break;
     }
@@ -345,11 +294,9 @@ async function querySerpApiMapBusinesses(
     for (const place of localResults) {
       const links = place["links"] as Record<string, unknown> | undefined;
       const website =
-        typeof place["website"] === "string"
-          ? (place["website"] as string)
-          : typeof links?.["website"] === "string"
-            ? (links["website"] as string)
-            : undefined;
+        typeof links?.["website"] === "string"
+          ? (links["website"] as string)
+          : undefined;
 
       const entry = buildResult(
         keyword,
@@ -357,7 +304,7 @@ async function querySerpApiMapBusinesses(
         place["title"] as string | undefined,
         website,
         place["title"] as string | undefined,
-        place["phone"] as string | undefined,
+        undefined,
         place["address"] as string | undefined
       );
 
@@ -367,10 +314,22 @@ async function querySerpApiMapBusinesses(
     }
 
     console.log(
-      `[SerpApi] Maps ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after offset ${start}`
+      `[SerpApi] Local ${keyword} @ ${market.serpApiLocation}: ${byDomain.size}/${targetDomains} businesses with websites after page ${page + 1}`
     );
 
-    if (localResults.length === 0) break;
+    const pagination = data["serpapi_pagination"] as
+      | Record<string, unknown>
+      | undefined;
+    const next =
+      typeof pagination?.["next"] === "string"
+        ? (pagination["next"] as string)
+        : undefined;
+
+    if (localResults.length === 0 || !next) break;
+
+    const nextPageUrl = new URL(next);
+    nextPageUrl.searchParams.set("api_key", apiKey);
+    nextUrl = nextPageUrl.toString();
   }
 
   return Array.from(byDomain.values());
@@ -417,13 +376,13 @@ async function searchLocalizedMarket(
     return searchOneMarket(keyword, market, serperKey, undefined, appendMarket);
   }
 
-  const [serperBusinesses, mapBusinesses, paid] = await Promise.all([
+  const [serperBusinesses, localBusinesses, paid] = await Promise.all([
     querySerperPlaces(serperKey, keyword, market, appendMarket),
-    querySerpApiMapBusinesses(serpApiKey, keyword, market, discoveryTarget),
+    querySerpApiLocalBusinesses(serpApiKey, keyword, market, discoveryTarget),
     querySerpApiAds(serpApiKey, keyword, market),
   ]);
 
-  return [...paid, ...mapBusinesses, ...serperBusinesses];
+  return [...paid, ...localBusinesses, ...serperBusinesses];
 }
 
 export async function searchAds(
