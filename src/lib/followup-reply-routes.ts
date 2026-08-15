@@ -5,6 +5,7 @@ import { classifyReply, REPLY_PROMPT_VERSION } from "./ai-reply.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailThread } from "./gmail.js";
 import { sendApprovedMessage } from "./outreach-sending.js";
+import { estimateAiCost } from "./ai-cost.js";
 
 async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -34,7 +35,7 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
     return prisma.$transaction(async (tx) => {
       const message = await tx.outreachMessage.create({ data: { leadId, kind: "followup", sequenceNumber, subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, status: autoApprove ? "approved" : "draft", approvedAt: autoApprove ? new Date() : null } });
       await tx.activity.create({ data: { leadId, type: autoApprove ? "followup_auto_approved" : "followup_generated", summary: `${autoApprove ? "Auto-approved" : "Generated"} follow-up ${sequenceNumber - 1}`, metadata: { confidence: generated.draft.confidence, model: generated.model, sequenceId: sequence.id } } });
-      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, completedAt: new Date() } });
+      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
       return message;
     });
   } catch (error) {
@@ -78,7 +79,7 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
       await tx.emailThread.upsert({ where: { providerThreadId: threadId }, update: { status: c === "bounce" || c === "unsubscribe" ? "closed" : "replied", lastInboundAt: latest.internalDate, recipientEmail: lead.email }, create: { leadId, provider: "gmail", providerThreadId: threadId, recipientEmail: lead.email, status: c === "bounce" || c === "unsubscribe" ? "closed" : "replied", lastInboundAt: latest.internalDate } });
       await tx.activity.create({ data: { leadId, type: "reply_received", summary: `${c}: ${classified.result.summary}`, metadata: { gmailMessageId: latest.id, providerThreadId: threadId, recommendedAction: classified.result.recommendedAction, confidence: classified.result.confidence } } });
       if ((c === "unsubscribe" || c === "bounce") && lead.email) await tx.suppression.upsert({ where: { type_value: { type: "email", value: lead.email.toLowerCase() } }, update: { reason: c }, create: { leadId, type: "email", value: lead.email.toLowerCase(), reason: c } });
-      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: classified.model, inputTokens: classified.inputTokens, outputTokens: classified.outputTokens, completedAt: new Date() } });
+      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: classified.model, inputTokens: classified.inputTokens, outputTokens: classified.outputTokens, estimatedCost: estimateAiCost(classified.model, classified.inputTokens, classified.outputTokens), completedAt: new Date() } });
     });
     return classified.result;
   } catch (error) {
