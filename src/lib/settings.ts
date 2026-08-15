@@ -9,6 +9,8 @@ export const AppSettingsInputSchema = z.object({
   approvalMode: ApprovalModeSchema,
   researchModel: z.string().min(1).max(100),
   outreachModel: z.string().min(1).max(100),
+  researchInstructions: z.string().min(20).max(12000),
+  outreachInstructions: z.string().min(20).max(12000),
   researchBatchSize: z.number().int().min(1).max(100),
   minAutoApprovePriority: z.number().int().min(0).max(100),
   minAutoApproveConfidence: z.number().min(0).max(1),
