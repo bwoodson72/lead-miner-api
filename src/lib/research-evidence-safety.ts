@@ -60,3 +60,13 @@ export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(pro
 export function isSafePrimaryOutreachProblem(problem: EvidenceSafetyProblem) {
   return problem.outreachValue !== "low" && problem.confidence >= 0.6;
 }
+
+export function sanitizePrimaryOutreachAngle(angle: string | null, problems: EvidenceSafetyProblem[]) {
+  if (!angle) return null;
+  if (!TEMPLATE_CONTAMINATION.test(angle)) return angle;
+  const corroborated = problems.some((problem) => {
+    if (!TEMPLATE_CONTAMINATION.test(`${problem.category} ${problem.title} ${problem.evidence}`)) return false;
+    return problem.evidenceSources.some((source) => !UNVERIFIED_DOM_SOURCES.has(source)) && isSafePrimaryOutreachProblem(problem);
+  });
+  return corroborated ? angle : null;
+}
