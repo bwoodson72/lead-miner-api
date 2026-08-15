@@ -9,6 +9,7 @@ import { DEFAULT_THRESHOLDS } from "./config/thresholds.js";
 import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
 import { registerResearchRoutes } from "./lib/research-routes.js";
 import { registerOutreachRoutes } from "./lib/outreach-routes.js";
+import { registerAnalyticsRoutes } from "./lib/analytics-routes.js";
 import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -105,6 +106,8 @@ app.get("/api/leads/:id/detail", async (req, res) => {
         activities: { orderBy: { createdAt: "desc" } },
         aiJobs: { orderBy: { createdAt: "desc" } },
         suppressions: { orderBy: { createdAt: "desc" } },
+        contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
+        emailThreads: { orderBy: { updatedAt: "desc" } },
       },
     });
     if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
@@ -157,6 +160,7 @@ app.post("/api/leads/batch-reject", async (req, res) => {
 
 registerResearchRoutes(app, prisma);
 registerOutreachRoutes(app, prisma);
+registerAnalyticsRoutes(app, prisma);
 setInterval(cleanOldJobs, 10 * 60 * 1000);
 const port = process.env["PORT"] ?? 3001;
 app.listen(port, () => console.log(`[Server] Listening on port ${port}`));
