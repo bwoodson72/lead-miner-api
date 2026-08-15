@@ -8,8 +8,11 @@ import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
 import { SAFETY_LIMITS } from "./safety-limits.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
+import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
+  registerResearchMaintenanceRoutes(app, prisma);
+
   app.post("/api/automation/tick", async (req, res) => {
     const auth = authorizeCronRequest(req.headers.authorization);
     if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
