@@ -31,6 +31,7 @@ function schema() {
 function sanitizeProspectFacingEvidence(value: string | null): string | null {
   if (!value) return value;
   return value
+    .replace(/\s*\[Sources:[^\]]+\]/gi, "")
     .replace(/\bLighthouse\b/gi, "site performance testing")
     .replace(/\bPageSpeed(?: Insights)?\b/gi, "site performance testing")
     .replace(/\bCore Web Vitals?\b/gi, "site performance")
@@ -56,9 +57,6 @@ export async function generateOutreachDraft(input: {
   qualificationReason: string | null;
   problems: Array<{ title: string; evidence: string; businessConsequence: string; confidence: number; outreachValue: string }>;
 }, model: string, minProblemConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; outputTokens?: number }> {
-  const env = getEnv();
-  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
-
   const vettedProblems = input.problems
     .filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low")
     .slice(0, 4)
@@ -72,6 +70,9 @@ export async function generateOutreachDraft(input: {
   if (!vettedProblems.length) {
     throw new Error("No evidence-backed outreach problem meets the configured safety threshold");
   }
+
+  const env = getEnv();
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
 
   const packet = {
     businessName: input.businessName,
