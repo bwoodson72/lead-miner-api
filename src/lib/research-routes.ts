@@ -25,7 +25,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
 
   const aiJob = await prisma.aIJob.create({ data: { leadId, type: "outreach_draft", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_PROMPT_VERSION, startedAt: new Date() } });
   try {
-    const generated = await generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence);
+    const generated = await generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions);
     const shouldAutoApprove = settings.approvalMode === "auto_safe" && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority && generated.draft.confidence >= settings.minAutoApproveConfidence;
     const status = shouldAutoApprove ? "approved" : "draft";
     return prisma.$transaction(async (tx) => {
@@ -49,7 +49,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
   const settings = await getAppSettings(prisma);
   const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
   try {
-    const { result, model, inputTokens, outputTokens } = await researchLead(lead, settings.researchModel);
+    const { result, model, inputTokens, outputTokens } = await researchLead(lead, settings.researchModel, settings.researchInstructions);
     const priorityScore = calculatePriority(result.scores);
     const nextStatus = result.decision === "qualified" ? "qualified" : result.decision === "disqualified" ? "disqualified" : lead.status;
     await prisma.$transaction(async (tx) => {
