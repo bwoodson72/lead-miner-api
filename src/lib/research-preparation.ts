@@ -31,14 +31,15 @@ export class ResearchPreparationError extends Error {
 
 /**
  * Ensures contact discovery has had an eligible chance to run before AI research.
- * This deliberately respects exhausted and future retry states so clicking Research
- * cannot repeatedly spend enrichment/provider credits on known dead ends.
+ * Background/automatic work respects exhausted and future retry states. A manual
+ * research action may explicitly force one enrichment pass now.
  */
 export async function prepareLeadForResearch(
   prisma: PrismaClient,
   leadId: number,
   enrich: EnrichLeadEmailFn = enrichLeadEmail,
   now = new Date(),
+  forceEmailEnrichment = false,
 ): Promise<ResearchPreparationResult> {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -74,7 +75,7 @@ export async function prepareLeadForResearch(
     };
   }
 
-  if (lead.emailEnrichmentStatus === "exhausted") {
+  if (!forceEmailEnrichment && lead.emailEnrichmentStatus === "exhausted") {
     return {
       leadId,
       ready: false,
@@ -87,6 +88,7 @@ export async function prepareLeadForResearch(
   }
 
   if (
+    !forceEmailEnrichment &&
     lead.emailEnrichmentStatus === "retry" &&
     lead.nextEmailEnrichmentAt &&
     lead.nextEmailEnrichmentAt > now
@@ -103,9 +105,9 @@ export async function prepareLeadForResearch(
     };
   }
 
-  // A `found` state with no Lead.email is inconsistent. Do not silently spend
-  // provider credits until the record is repaired or explicitly reset.
-  if (lead.emailEnrichmentStatus === "found") {
+  // A `found` state with no Lead.email is inconsistent. Automated work stops so
+  // it cannot spend credits silently; a manual research action may force repair.
+  if (!forceEmailEnrichment && lead.emailEnrichmentStatus === "found") {
     return {
       leadId,
       ready: false,
@@ -176,8 +178,9 @@ export async function getPreparedLeadForResearch(
   leadId: number,
   enrich: EnrichLeadEmailFn = enrichLeadEmail,
   now = new Date(),
+  forceEmailEnrichment = false,
 ) {
-  const preparation = await prepareLeadForResearch(prisma, leadId, enrich, now);
+  const preparation = await prepareLeadForResearch(prisma, leadId, enrich, now, forceEmailEnrichment);
   if (!preparation.ready) throw new ResearchPreparationError(preparation);
 
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
