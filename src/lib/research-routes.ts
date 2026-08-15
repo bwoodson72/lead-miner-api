@@ -10,15 +10,9 @@ import {
   ResearchPreparationError,
   type ResearchPreparationResult,
 } from "./research-preparation.js";
-import { acquireAutomationLease, acquireAutomationSlot, releaseAutomationLease } from "./automation-lock.js";
+import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
+import { withAiCapacity } from "./ai-capacity.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
-
-async function withAiCapacity<T>(prisma: PrismaClient, operation: () => Promise<T>): Promise<T> {
-  const slot = await acquireAutomationSlot(prisma, "ai-work", SAFETY_LIMITS.aiResearchConcurrency, 10 * 60_000);
-  if (!slot) throw new Error(`AI concurrency limit reached (${SAFETY_LIMITS.aiResearchConcurrency})`);
-  try { return await operation(); }
-  finally { await releaseAutomationLease(prisma, slot); }
-}
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -47,6 +41,31 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   }
 }
 
+async function invalidateUnsentInitialOutreach(prisma: PrismaClient, leadId: number) {
+  const cancelled = await prisma.outreachMessage.updateMany({
+    where: {
+      leadId,
+      kind: "initial",
+      sequenceNumber: 1,
+      status: { in: ["draft", "approved"] },
+    },
+    data: { status: "cancelled" },
+  });
+
+  if (cancelled.count > 0) {
+    await prisma.activity.create({
+      data: {
+        leadId,
+        type: "research_outreach_invalidated",
+        summary: `Cancelled ${cancelled.count} unsent initial outreach message(s) after successful re-research`,
+        metadata: { researchVersion: RESEARCH_VERSION, cancelledCount: cancelled.count },
+      },
+    });
+  }
+
+  return cancelled.count;
+}
+
 export async function processLeadResearch(prisma: PrismaClient, leadId: number) {
   const lease = await acquireAutomationLease(prisma, `lead-research-${leadId}`, 10 * 60_000);
   if (!lease) throw new Error("Lead research is already running");
@@ -68,9 +87,17 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
         await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model, preparationStatus: preparation.status, enrichmentAttempted: preparation.enrichmentAttempted } } });
         await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
       });
+
+      // Research has successfully replaced the evidence set. Any unsent initial
+      // copy based on the previous evidence is now stale. Never touch sending or
+      // sent messages; only draft/approved copy is invalidated and regenerated.
+      const invalidatedDrafts = await invalidateUnsentInitialOutreach(prisma, leadId);
       let draft = null;
-      if (result.decision === "qualified") { try { draft = await ensureInitialOutreachDraft(prisma, leadId); } catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); } }
-      return { result, priorityScore, draft, preparation };
+      if (result.decision === "qualified") {
+        try { draft = await ensureInitialOutreachDraft(prisma, leadId); }
+        catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); }
+      }
+      return { result, priorityScore, draft, preparation, invalidatedDrafts };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
@@ -185,6 +212,7 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
       const processed = await processLeadResearch(prisma, id);
       res.json({
         preparation: processed.preparation,
+        invalidatedDrafts: processed.invalidatedDrafts,
         lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } }),
       });
     } catch (error) {
