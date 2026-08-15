@@ -33,6 +33,14 @@ function lowerOutreachValue(value: "low" | "medium" | "high", ceiling: "low" | "
   return value === "high" ? "medium" as const : value;
 }
 
+function annotateEvidence<T extends EvidenceSafetyProblem>(problem: T): T {
+  const visibility = isUnverifiedDomOnly(problem) ? " — visibility unverified" : "";
+  return {
+    ...problem,
+    evidence: `${problem.evidence} [Sources: ${problem.evidenceSources.join(", ")}${visibility}]`,
+  };
+}
+
 export function containsTemplateContamination(value: string | null | undefined) {
   return Boolean(value && TEMPLATE_CONTAMINATION.test(value));
 }
@@ -48,22 +56,22 @@ export function isUnverifiedTemplateProblem(problem: EvidenceSafetyProblem) {
 
 export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(problem: T): T {
   if (isUnverifiedTemplateProblem(problem)) {
-    return {
+    return annotateEvidence({
       ...problem,
       confidence: Math.min(problem.confidence, 0.4),
       outreachValue: lowerOutreachValue(problem.outreachValue, "low"),
-    };
+    });
   }
 
   if (isUnverifiedDomOnly(problem)) {
-    return {
+    return annotateEvidence({
       ...problem,
       confidence: Math.min(problem.confidence, 0.65),
       outreachValue: lowerOutreachValue(problem.outreachValue, "medium"),
-    };
+    });
   }
 
-  return problem;
+  return annotateEvidence(problem);
 }
 
 export function isSafePrimaryOutreachProblem(problem: EvidenceSafetyProblem) {
