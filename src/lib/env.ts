@@ -3,6 +3,14 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const envBoolean = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   SERPER_API_KEY: z.string().min(1),
   SERPAPI_KEY: z.string().min(1).optional(),
@@ -16,8 +24,8 @@ const envSchema = z.object({
   OPENAI_RESEARCH_MODEL: z.string().min(1).optional().default("gpt-5.6-luna"),
   OPENAI_OUTREACH_MODEL: z.string().min(1).optional().default("gpt-5.6-luna"),
   AI_RESEARCH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional().default(10),
-  AUTO_RESEARCH: z.coerce.boolean().optional().default(true),
-  AUTO_DRAFT_OUTREACH: z.coerce.boolean().optional().default(true),
+  AUTO_RESEARCH: envBoolean.optional().default(true),
+  AUTO_DRAFT_OUTREACH: envBoolean.optional().default(true),
 });
 
 type Env = z.infer<typeof envSchema>;
