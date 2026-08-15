@@ -10,9 +10,13 @@ datasource db {
 model Lead {
   id Int @id @default(autoincrement())
   domain String @unique
+  normalizedDomain String? @unique @map("normalized_domain")
   businessName String? @map("business_name")
   landingPageUrl String @map("landing_page_url")
   keyword String
+  category String?
+  city String?
+  region String?
   adSource String @default("local_organic") @map("ad_source")
   lighthouseScore Int @map("lighthouse_score")
   lcp Int
@@ -51,9 +55,11 @@ model Lead {
   outreachMessages OutreachMessage[]
   aiJobs AIJob[]
   suppressions Suppression[]
+  contacts Contact[]
+  emailThreads EmailThread[]
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
-  @@index([status])
+  @@index([status, priorityScore])
   @@index([qualificationDecision, priorityScore])
   @@index([followUpDate, status])
   @@index([replyStatus, lastReplyAt])
@@ -62,6 +68,53 @@ model Lead {
   @@index([isAgencyManaged])
   @@index([isNationalChain])
   @@map("leads")
+}
+
+model Contact {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  type String
+  value String
+  role String?
+  source String?
+  verificationStatus String? @map("verification_status")
+  isPrimary Boolean @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@unique([leadId, type, value])
+  @@index([type, value])
+  @@index([leadId, isPrimary])
+  @@map("contacts")
+}
+
+model OutreachSequence {
+  id Int @id @default(autoincrement())
+  name String @unique
+  delaysDays Json @map("delays_days")
+  maxTouches Int @map("max_touches")
+  isActive Boolean @default(false) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([isActive])
+  @@map("outreach_sequences")
+}
+
+model EmailThread {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  provider String
+  providerThreadId String @unique @map("provider_thread_id")
+  recipientEmail String? @map("recipient_email")
+  status String @default("open")
+  lastOutboundAt DateTime? @map("last_outbound_at")
+  lastInboundAt DateTime? @map("last_inbound_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, provider])
+  @@index([status, lastInboundAt])
+  @@map("email_threads")
 }
 
 model LeadProblem {
