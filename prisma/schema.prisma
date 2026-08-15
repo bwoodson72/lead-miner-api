@@ -3,7 +3,9 @@ generator client {
   output    = "../src/generated/prisma"
 }
 
-datasource db { provider = "postgresql" }
+datasource db {
+  provider = "postgresql"
+}
 
 model Lead {
   id Int @id @default(autoincrement())
