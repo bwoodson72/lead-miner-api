@@ -10,7 +10,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v1";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v2";
 
 function schema() {
   return {
@@ -25,6 +25,23 @@ function schema() {
       confidence: { type: "number", minimum: 0, maximum: 1 },
     },
   };
+}
+
+function sanitizeProspectFacingEvidence(value: string | null): string | null {
+  if (!value) return value;
+  return value
+    .replace(/\bLighthouse\b/gi, "site performance testing")
+    .replace(/\bPageSpeed(?: Insights)?\b/gi, "site performance testing")
+    .replace(/\bCore Web Vitals?\b/gi, "site performance")
+    .replace(/\bLCP\b/gi, "load time")
+    .replace(/\bCLS\b/gi, "layout stability")
+    .replace(/\bTBT\b/gi, "page responsiveness")
+    .replace(/\bperformance score\b/gi, "site performance")
+    .replace(/\bscore(?:d)?\s*(?:of|at|:)\s*\d+(?:\/100)?\b/gi, "showed weak performance")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?)\b/gi, "a noticeable delay")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:s|seconds?)\b/gi, "several seconds")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export async function generateOutreachDraft(input: {
@@ -42,10 +59,18 @@ export async function generateOutreachDraft(input: {
     businessName: input.businessName,
     domain: input.domain,
     keyword: input.keyword,
-    primaryOutreachAngle: input.primaryOutreachAngle,
-    researchSummary: input.researchSummary,
-    qualificationReason: input.qualificationReason,
-    problems: input.problems.filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low").slice(0, 4),
+    primaryOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle),
+    researchSummary: sanitizeProspectFacingEvidence(input.researchSummary),
+    qualificationReason: sanitizeProspectFacingEvidence(input.qualificationReason),
+    problems: input.problems
+      .filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low")
+      .slice(0, 4)
+      .map((p) => ({
+        ...p,
+        title: sanitizeProspectFacingEvidence(p.title) ?? p.title,
+        evidence: sanitizeProspectFacingEvidence(p.evidence) ?? p.evidence,
+        businessConsequence: sanitizeProspectFacingEvidence(p.businessConsequence) ?? p.businessConsequence,
+      })),
   };
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -53,7 +78,13 @@ export async function generateOutreachDraft(input: {
     body: JSON.stringify({
       model,
       input: [
-        { role: "system", content: [{ type: "input_text", text: "Write a concise personalized cold outreach email for a web-development prospect. Use only supplied evidence. Focus on one concrete business-impact problem, not a technical audit dump. Do not invent metrics, traffic loss, revenue loss, ad spend, or facts. Avoid generic compliments and fake familiarity. Keep the email plainspoken and short, with one low-friction CTA to discuss whether fixing the issue is worthwhile. Do not use placeholders." }] },
+        {
+          role: "system",
+          content: [{
+            type: "input_text",
+            text: "Write a concise personalized cold outreach email for a web-development prospect. Use only supplied evidence. Focus on one concrete business-impact problem, not a technical audit dump. NEVER mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, or technical benchmark names in the prospect-facing email. Translate technical findings into plain business language such as slow loading, mobile friction, confusing calls to action, weak presentation, or visitors leaving before they can act, but do not claim a consequence that is not supported by the supplied evidence. Do not invent metrics, traffic loss, revenue loss, ad spend, or facts. Avoid generic compliments and fake familiarity. Keep the email plainspoken and short, with one low-friction CTA to discuss whether fixing the issue is worthwhile. Do not use placeholders."
+          }],
+        },
         { role: "user", content: [{ type: "input_text", text: `Create the first outreach email from this qualified Lead Miner packet:\n${JSON.stringify(packet)}` }] },
       ],
       text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
