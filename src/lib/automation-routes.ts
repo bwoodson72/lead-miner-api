@@ -6,6 +6,7 @@ import { reconcileStaleSends, sendApprovedQueue } from "./outreach-sending.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
+import { SAFETY_LIMITS } from "./safety-limits.js";
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/automation/tick", async (req, res) => {
@@ -17,14 +18,25 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
 
     try {
       const settings = await getAppSettings(prisma);
-      const replies = settings.emailProvider === "gmail" ? await syncReplies(prisma, 100) : [];
-      const emailEnrichment = await enrichMissingEmails(prisma, 10);
-      const research = settings.autoResearch ? await processResearchReadyLeads(prisma, settings.researchBatchSize) : [];
-      const reconciled = await reconcileStaleSends(prisma, 10);
-      const followups = await processDueFollowUps(prisma, 50);
-      const sends = await sendApprovedQueue(prisma, 50);
+      const replies = settings.emailProvider === "gmail" ? await syncReplies(prisma, SAFETY_LIMITS.automationReplySyncMax) : [];
+      const emailEnrichment = await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax);
+      const researchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax);
+      const research = settings.autoResearch ? await processResearchReadyLeads(prisma, researchLimit) : [];
+      const reconciled = await reconcileStaleSends(prisma, SAFETY_LIMITS.automationStaleSendMax);
+      const followups = await processDueFollowUps(prisma, SAFETY_LIMITS.automationFollowupMax);
+      const sends = await sendApprovedQueue(prisma, SAFETY_LIMITS.automationSendMax);
       res.json({
         success: true,
+        limits: {
+          replySync: SAFETY_LIMITS.automationReplySyncMax,
+          emailEnrichment: SAFETY_LIMITS.automationEnrichmentMax,
+          research: researchLimit,
+          staleSendReconciliation: SAFETY_LIMITS.automationStaleSendMax,
+          followups: SAFETY_LIMITS.automationFollowupMax,
+          sends: SAFETY_LIMITS.automationSendMax,
+          aiConcurrency: SAFETY_LIMITS.aiResearchConcurrency,
+          enrichmentConcurrency: SAFETY_LIMITS.emailEnrichmentConcurrency,
+        },
         replyThreadsChecked: replies.length,
         repliesFound: replies.filter((r) => r.reply).length,
         emailEnrichmentProcessed: emailEnrichment.length,
