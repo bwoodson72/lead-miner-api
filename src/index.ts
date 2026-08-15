@@ -92,6 +92,28 @@ app.get("/api/leads", async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) }); }
 });
 
+app.get("/api/leads/:id/detail", async (req, res) => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      include: {
+        problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] },
+        scores: { orderBy: { createdAt: "desc" } },
+        outreachMessages: { orderBy: [{ sequenceNumber: "asc" }, { generatedAt: "asc" }] },
+        activities: { orderBy: { createdAt: "desc" } },
+        aiJobs: { orderBy: { createdAt: "desc" } },
+        suppressions: { orderBy: { createdAt: "desc" } },
+      },
+    });
+    if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+    res.json({ lead });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get("/api/dashboard/summary", async (_req, res) => {
   const now = new Date();
   const [newLeads, qualified, ready, followupsDue, replies, interested, aiFailures] = await Promise.all([
