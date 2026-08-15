@@ -5,7 +5,11 @@ import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { registerEnrichmentRoutes } from "./enrichment-routes.js";
-import { prepareLeadForResearch, type ResearchPreparationResult } from "./research-preparation.js";
+import {
+  getPreparedLeadForResearch,
+  ResearchPreparationError,
+  type ResearchPreparationResult,
+} from "./research-preparation.js";
 import { acquireAutomationLease, acquireAutomationSlot, releaseAutomationLease } from "./automation-lock.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
@@ -47,9 +51,9 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
   const lease = await acquireAutomationLease(prisma, `lead-research-${leadId}`, 10 * 60_000);
   if (!lease) throw new Error("Lead research is already running");
   try {
-    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-    if (!lead) throw new Error("Lead not found");
-    if (!lead.email) throw new Error("Lead has no email; contact enrichment must succeed before AI research");
+    // Contact preparation is part of research itself. No caller is allowed to
+    // bypass enrichment by invoking processLeadResearch directly.
+    const { lead, preparation } = await getPreparedLeadForResearch(prisma, leadId);
     const settings = await getAppSettings(prisma);
     const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
     try {
@@ -61,12 +65,12 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
         if (result.problems.length) await tx.leadProblem.createMany({ data: result.problems.map((p) => ({ leadId, category: p.category, title: p.title, evidence: p.evidence, businessConsequence: p.businessConsequence, recommendedImprovement: p.recommendedImprovement || null, confidence: p.confidence, outreachValue: p.outreachValue })) });
         await tx.leadScore.create({ data: { leadId, ...result.scores, compositeScore: priorityScore, model, researchVersion: RESEARCH_VERSION } });
         await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.qualificationReason, priorityScore, primaryOutreachAngle: result.primaryOutreachAngle, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date() } });
-        await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model } } });
+        await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model, preparationStatus: preparation.status, enrichmentAttempted: preparation.enrichmentAttempted } } });
         await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
       });
       let draft = null;
       if (result.decision === "qualified") { try { draft = await ensureInitialOutreachDraft(prisma, leadId); } catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); } }
-      return { result, priorityScore, draft };
+      return { result, priorityScore, draft, preparation };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
@@ -118,32 +122,39 @@ export async function processPreparedResearchBatch(prisma: PrismaClient, leadIds
   const results: PreparedResearchResult[] = [];
 
   for (const id of leadIds) {
-    const preparation = await prepareLeadForResearch(prisma, id);
-    if (!preparation.ready) {
-      results.push({
-        id,
-        preparation,
-        success: false,
-        skipped: true,
-        error: preparation.reason ?? `Lead is not research-ready (${preparation.status})`,
-      });
-      continue;
-    }
-
     try {
       const processed = await processLeadResearch(prisma, id);
       results.push({
         id,
-        preparation,
+        preparation: processed.preparation,
         success: true,
         decision: processed.result.decision,
         priorityScore: processed.priorityScore,
         draftId: processed.draft?.id,
       });
     } catch (error) {
+      if (error instanceof ResearchPreparationError) {
+        results.push({
+          id,
+          preparation: error.preparation,
+          success: false,
+          skipped: true,
+          error: error.message,
+        });
+        continue;
+      }
+
       results.push({
         id,
-        preparation,
+        preparation: {
+          leadId: id,
+          ready: true,
+          status: "ready",
+          email: null,
+          alreadyHadEmail: false,
+          enrichmentAttempted: false,
+          reason: null,
+        },
         success: false,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -156,7 +167,7 @@ export async function processPreparedResearchBatch(prisma: PrismaClient, leadIds
 function statusForResearchError(message: string) {
   if (/lead not found/i.test(message)) return 404;
   if (/already running|concurrency limit/i.test(message)) return 409;
-  if (/no email|not research-ready|enrichment.*(?:exhausted|retry|found but)/i.test(message)) return 422;
+  if (/no email|not research-ready|enrichment.*(?:exhausted|retry|found but)|no email was persisted/i.test(message)) return 422;
   if (/openai|provider|fetch failed|econn|etimedout|429|502|503|504/i.test(message)) return 502;
   return 500;
 }
@@ -170,26 +181,25 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   });
   app.post("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
-    let preparation: ResearchPreparationResult | null = null;
     try {
-      preparation = await prepareLeadForResearch(prisma, id);
-      if (!preparation.ready) {
-        const message = preparation.reason ?? `Lead is not research-ready (${preparation.status})`;
-        const status = preparation.status === "deferred" ? 409 : preparation.status === "missing" ? 404 : 422;
-        console.warn(`[Research] Lead ${id} blocked before AI — status=${preparation.status}, reason=${message}`);
-        res.status(status).json({ error: message, stage: "preparation", preparation });
-        return;
-      }
-      await processLeadResearch(prisma, id);
+      const processed = await processLeadResearch(prisma, id);
       res.json({
-        preparation,
+        preparation: processed.preparation,
         lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } }),
       });
     } catch (error) {
+      if (error instanceof ResearchPreparationError) {
+        const preparation = error.preparation;
+        const status = preparation.status === "deferred" ? 409 : preparation.status === "missing" ? 404 : 422;
+        console.warn(`[Research] Lead ${id} blocked before AI — status=${preparation.status}, reason=${error.message}`);
+        res.status(status).json({ error: error.message, stage: "preparation", preparation });
+        return;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       const status = statusForResearchError(message);
-      console.error(`[Research] Lead ${id} failed — stage=${preparation?.ready ? "research" : "preparation"}, status=${status}, error=${message}`, error);
-      res.status(status).json({ error: message, stage: preparation?.ready ? "research" : "preparation", preparation });
+      console.error(`[Research] Lead ${id} failed — stage=research, status=${status}, error=${message}`, error);
+      res.status(status).json({ error: message, stage: "research" });
     }
   });
   app.post("/api/leads/bulk-research", async (req, res) => {
