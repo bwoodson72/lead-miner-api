@@ -20,7 +20,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
 
   app.post("/api/outreach/backfill-drafts", async (_req, res) => {
     try {
-      const leads = await prisma.lead.findMany({ where: { qualificationDecision: "qualified", email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: 25, select: { id: true } });
+      const leads = await prisma.lead.findMany({ where: { qualificationDecision: "qualified", email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: 25, select: { id: true } });
       const results: Array<{ leadId:number; success:boolean; messageId?:number; error?:string }> = [];
       for (const lead of leads) { try { const message = await ensureInitialOutreachDraft(prisma, lead.id); results.push({ leadId: lead.id, success: true, messageId: message?.id }); } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
       res.json({ processed: results.length, results });
@@ -31,7 +31,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid message id" }); return; }
     const current = await prisma.outreachMessage.findUnique({ where: { id } });
     if (!current) { res.status(404).json({ error: "Message not found" }); return; }
-    if (current.status === "sent") { res.status(409).json({ error: "Sent messages cannot be edited" }); return; }
+    if (["sending", "sent"].includes(current.status)) { res.status(409).json({ error: "Messages cannot be edited after sending has started" }); return; }
     const { subject, bodyText, status } = req.body as { subject?:unknown; bodyText?:unknown; status?:unknown };
     const data: Record<string, unknown> = {};
     if (typeof subject === "string" && subject.trim()) data.subject = subject.trim();
