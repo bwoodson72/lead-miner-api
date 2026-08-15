@@ -11,6 +11,10 @@ function createPrismaClient() {
 const prisma = createPrismaClient();
 export { prisma };
 
+export function normalizeDomainValue(domain: string): string {
+  return domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0]!.replace(/\.$/, "");
+}
+
 export type UpsertResult = {
   domain: string;
   action: "created" | "updated" | "failed";
@@ -20,32 +24,15 @@ export type UpsertResult = {
 
 export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
   try {
-    const existing = await prisma.lead.findUnique({ where: { domain: lead.domain }, select: { id: true } });
-    const result = await prisma.lead.upsert({
-      where: { domain: lead.domain },
-      create: {
-        domain: lead.domain,
-        businessName: lead.businessName ?? null,
-        landingPageUrl: lead.landingPageUrl,
-        keyword: lead.keyword,
-        adSource: lead.adSource,
-        lighthouseScore: lead.performanceScore,
-        lcp: Math.round(lead.lcp),
-        cls: lead.cls ?? null,
-        tbt: lead.tbt ? Math.round(lead.tbt) : null,
-        email: lead.email ?? null,
-        phone: lead.phone ?? null,
-        address: lead.address ?? null,
-        contactPageUrl: lead.contactPageUrl ?? null,
-        enrichmentStatus: lead.enrichmentStatus ?? null,
-        enrichmentNotes: lead.enrichmentNotes ?? null,
-        isAgencyManaged: lead.isAgencyManaged ?? false,
-        agencyName: lead.agencyName ?? null,
-        isNationalChain: lead.isNationalChain ?? false,
-        chainReason: lead.chainReason ?? null,
-        status: "research_pending",
-      },
-      update: {
+    const normalizedDomain = normalizeDomainValue(lead.domain);
+    const existing = await prisma.lead.findFirst({
+      where: { OR: [{ domain: lead.domain }, { normalizedDomain }] },
+      select: { id: true },
+    });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const data = {
+        normalizedDomain,
         keyword: lead.keyword,
         adSource: lead.adSource,
         lighthouseScore: lead.performanceScore,
@@ -64,7 +51,49 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         agencyName: lead.agencyName ?? undefined,
         isNationalChain: lead.isNationalChain ?? undefined,
         chainReason: lead.chainReason ?? undefined,
-      },
+      };
+
+      const saved = existing
+        ? await tx.lead.update({ where: { id: existing.id }, data })
+        : await tx.lead.create({ data: {
+            domain: lead.domain,
+            normalizedDomain,
+            businessName: lead.businessName ?? null,
+            landingPageUrl: lead.landingPageUrl,
+            keyword: lead.keyword,
+            adSource: lead.adSource,
+            lighthouseScore: lead.performanceScore,
+            lcp: Math.round(lead.lcp),
+            cls: lead.cls ?? null,
+            tbt: lead.tbt ? Math.round(lead.tbt) : null,
+            email: lead.email ?? null,
+            phone: lead.phone ?? null,
+            address: lead.address ?? null,
+            contactPageUrl: lead.contactPageUrl ?? null,
+            enrichmentStatus: lead.enrichmentStatus ?? null,
+            enrichmentNotes: lead.enrichmentNotes ?? null,
+            isAgencyManaged: lead.isAgencyManaged ?? false,
+            agencyName: lead.agencyName ?? null,
+            isNationalChain: lead.isNationalChain ?? false,
+            chainReason: lead.chainReason ?? null,
+            status: "research_pending",
+          } });
+
+      if (lead.email) {
+        await tx.contact.upsert({
+          where: { leadId_type_value: { leadId: saved.id, type: "email", value: lead.email.toLowerCase() } },
+          update: { isPrimary: true, source: "enrichment" },
+          create: { leadId: saved.id, type: "email", value: lead.email.toLowerCase(), isPrimary: true, source: "enrichment" },
+        });
+      }
+      if (lead.phone) {
+        await tx.contact.upsert({
+          where: { leadId_type_value: { leadId: saved.id, type: "phone", value: lead.phone } },
+          update: { isPrimary: true, source: "enrichment" },
+          create: { leadId: saved.id, type: "phone", value: lead.phone, isPrimary: true, source: "enrichment" },
+        });
+      }
+      return saved;
     });
 
     const action = existing ? "updated" : "created";
