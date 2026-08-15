@@ -213,15 +213,16 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
     const elapsed = Date.now() - startTime;
     if (indexedEmail) {
       notes.push("Found email via search-index fallback despite unreachable site");
-      console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=yes, elapsed=${elapsed}ms`);
+      console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=yes, source=search-index, elapsed=${elapsed}ms`);
       return { ...(input.existingBusinessName && { businessName: input.existingBusinessName }), email: indexedEmail, enrichmentStatus: "enriched", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms` };
     }
+    console.log(`[Enrichment] Completed ${input.url} — status=failed, email=no, source=search-index-exhausted, elapsed=${elapsed}ms`);
     return { enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; search-index fallback found no email; elapsed=${elapsed}ms` };
   }
 
   const url = homepage.finalUrl;
   const siteDomain = new URL(url).hostname.replace(/^www\./,"");
-  let businessName = input.existingBusinessName || extractBusinessName(homepage.html);
+  const businessName = input.existingBusinessName || extractBusinessName(homepage.html);
   let email = pickBestEmail(extractEmails(homepage.html), siteDomain);
   let phone = pickBestPhone(extractPhones(homepage.html));
   let contactPageUrl: string | undefined;
@@ -230,6 +231,20 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
 
   const agencyDetection = detectAgency(homepage.html);
   const chainDetection = detectNationalChain(homepage.html, undefined, siteDomain);
+
+  if (!email && (agencyDetection.isAgencyManaged || chainDetection.isNationalChain)) {
+    const reason = agencyDetection.isAgencyManaged
+      ? `agency-managed${agencyDetection.agencyName ? ` (${agencyDetection.agencyName})` : ""}`
+      : `national chain${chainDetection.reason ? ` (${chainDetection.reason})` : ""}`;
+    notes.push(`Stopped email discovery early: ${reason}`);
+    const elapsed = Date.now() - startTime;
+    console.log(`[Enrichment] Completed ${input.url} — status=skipped, email=no, reason=${reason}, elapsed=${elapsed}ms`);
+    return {
+      ...(businessName && { businessName }), ...(phone && { phone }), enrichmentStatus: "skipped", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms`,
+      isAgencyManaged: agencyDetection.isAgencyManaged, ...(agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
+      isNationalChain: chainDetection.isNationalChain, ...(chainDetection.reason && { chainReason:chainDetection.reason }),
+    };
+  }
 
   if (!email) {
     const realLinks = discoverUsefulPages(homepage.html, url);
