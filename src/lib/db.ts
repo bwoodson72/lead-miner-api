@@ -4,14 +4,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { type LeadRecord } from "./schemas.js";
 
 function createPrismaClient() {
-  const adapter = new PrismaPg({
-    connectionString: process.env.DATABASE_URL!,
-  });
+  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
   return new PrismaClient({ adapter });
 }
 
 const prisma = createPrismaClient();
-
 export { prisma };
 
 export type UpsertResult = {
@@ -23,6 +20,7 @@ export type UpsertResult = {
 
 export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
   try {
+    const existing = await prisma.lead.findUnique({ where: { domain: lead.domain }, select: { id: true } });
     const result = await prisma.lead.upsert({
       where: { domain: lead.domain },
       create: {
@@ -45,6 +43,7 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         agencyName: lead.agencyName ?? null,
         isNationalChain: lead.isNationalChain ?? false,
         chainReason: lead.chainReason ?? null,
+        status: "research_pending",
       },
       update: {
         keyword: lead.keyword,
@@ -68,9 +67,7 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
       },
     });
 
-    const isNew = result.createdAt.getTime() === result.updatedAt.getTime();
-    const action = isNew ? "created" : "updated";
-
+    const action = existing ? "updated" : "created";
     console.log(`[DB] ${action} lead ${result.id} for ${lead.domain}`);
     return { domain: lead.domain, action, id: result.id };
   } catch (err) {
@@ -82,9 +79,6 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
 
 export async function upsertLeads(leads: LeadRecord[]): Promise<UpsertResult[]> {
   const results: UpsertResult[] = [];
-  for (const lead of leads) {
-    const result = await upsertLead(lead);
-    results.push(result);
-  }
+  for (const lead of leads) results.push(await upsertLead(lead));
   return results;
 }
