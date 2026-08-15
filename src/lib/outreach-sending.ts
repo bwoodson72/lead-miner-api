@@ -4,6 +4,12 @@ import { getEnv } from "./env.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
+import {
+  getSendIneligibilityReason,
+  isWithinSendWindow,
+  makeGmailRfcMessageId,
+  makeOutreachIdempotencyKey,
+} from "./workflow-policy.js";
 
 const DAY_MS = 86_400_000;
 const STALE_SEND_MS = 2 * 60_000;
@@ -12,22 +18,6 @@ export function nextFollowUpDate(delays: unknown, sequenceNumber: number): Date 
   const values = Array.isArray(delays) ? delays.filter((v): v is number => Number.isInteger(v) && Number(v) > 0) : [];
   const delay = values[sequenceNumber - 1];
   return delay ? new Date(Date.now() + delay * DAY_MS) : null;
-}
-
-function inSendWindow(start: string, end: string, now = new Date()): boolean {
-  const minutes = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  return minutes >= sh * 60 + sm && minutes <= eh * 60 + em;
-}
-
-function idempotencyKey(messageId: number) {
-  return `lead-miner/outreach/${messageId}`;
-}
-
-function gmailRfcMessageId(messageId: number, senderEmail: string) {
-  const domain = senderEmail.split("@")[1] || "lead-miner.local";
-  return `<lead-miner-outreach-${messageId}@${domain}>`;
 }
 
 async function providerSend(prisma: PrismaClient, message: any, settings: any, key: string) {
@@ -44,7 +34,7 @@ async function providerSend(prisma: PrismaClient, message: any, settings: any, k
       to: message.lead.email,
       subject: message.subject,
       bodyText: message.bodyText,
-      messageId: gmailRfcMessageId(message.id, settings.senderEmail),
+      messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
       threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
       inReplyToMessageId,
     });
@@ -66,13 +56,35 @@ async function providerSend(prisma: PrismaClient, message: any, settings: any, k
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true } } } });
   if (!message) throw new Error("Message not found");
-  if (!message.lead.email) throw new Error("Lead has no email address");
-  if (message.lead.replyStatus || message.lead.lastReplyAt) throw new Error("Lead has already replied");
-  if (["replied", "responded", "interested", "call_scheduled", "proposal_sent", "won", "lost", "rejected", "bounced", "unsubscribed", "closed_no_response"].includes(message.lead.status)) throw new Error(`Lead status ${message.lead.status} is not send-eligible`);
-  const email = message.lead.email.toLowerCase();
-  const domain = message.lead.domain.toLowerCase();
-  if (message.lead.suppressions.some((s) => s.value.toLowerCase() === email || s.value.toLowerCase() === domain)) throw new Error("Lead or email is suppressed");
+  const reason = getSendIneligibilityReason(message.lead);
+  if (reason) throw new Error(reason);
   return message;
+}
+
+export type ClaimApprovedResult =
+  | { state: "claimed"; idempotencyKey: string }
+  | { state: "already_sent"; message: any };
+
+/**
+ * Atomically transitions one approved message into the sending state.
+ * The status predicate is the concurrency guard: only one caller can claim it.
+ */
+export async function claimApprovedMessage(
+  prisma: PrismaClient,
+  messageId: number,
+  attemptedAt = new Date(),
+): Promise<ClaimApprovedResult> {
+  const key = makeOutreachIdempotencyKey(messageId);
+  const claimed = await prisma.outreachMessage.updateMany({
+    where: { id: messageId, status: "approved" },
+    data: { status: "sending", sendAttemptedAt: attemptedAt, sendError: null, idempotencyKey: key },
+  });
+
+  if (claimed.count === 1) return { state: "claimed", idempotencyKey: key };
+
+  const current = await prisma.outreachMessage.findUnique({ where: { id: messageId } });
+  if (current?.status === "sent") return { state: "already_sent", message: current };
+  throw new Error(`Message is not available to send (status: ${current?.status ?? "missing"})`);
 }
 
 async function completeSend(prisma: PrismaClient, message: any, settings: any, provider: { providerMessageId: string; providerThreadId: string | null; reconciled: boolean }) {
@@ -100,7 +112,7 @@ async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
   const settings = await getAppSettings(prisma);
   const message = await assertSendEligible(prisma, messageId);
   if (message.status !== "sending") throw new Error("Message is not claimed for sending");
-  const key = message.idempotencyKey ?? idempotencyKey(message.id);
+  const key = message.idempotencyKey ?? makeOutreachIdempotencyKey(message.id);
 
   try {
     const provider = await providerSend(prisma, message, settings, key);
@@ -118,31 +130,26 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
 
   try {
     const settings = await getAppSettings(prisma);
-    if (!inSendWindow(settings.sendWindowStart, settings.sendWindowEnd)) throw new Error(`Outside configured send window (${settings.sendWindowStart}-${settings.sendWindowEnd})`);
+    if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd)) throw new Error(`Outside configured send window (${settings.sendWindowStart}-${settings.sendWindowEnd})`);
 
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const sentOrClaimedToday = await prisma.outreachMessage.count({ where: { OR: [{ status: "sent", sentAt: { gte: startOfDay } }, { status: "sending", sendAttemptedAt: { gte: startOfDay } }] } });
     if (sentOrClaimedToday >= settings.dailySendLimit) throw new Error(`Daily send limit reached (${settings.dailySendLimit})`);
 
     await assertSendEligible(prisma, messageId);
-    const key = idempotencyKey(messageId);
-    const claimed = await prisma.outreachMessage.updateMany({
-      where: { id: messageId, status: "approved" },
-      data: { status: "sending", sendAttemptedAt: new Date(), sendError: null, idempotencyKey: key },
-    });
-    if (claimed.count !== 1) {
-      const current = await prisma.outreachMessage.findUnique({ where: { id: messageId } });
-      if (current?.status === "sent") return current;
-      throw new Error(`Message is not available to send (status: ${current?.status ?? "missing"})`);
-    }
-
+    const claim = await claimApprovedMessage(prisma, messageId);
+    if (claim.state === "already_sent") return claim.message;
     return await sendClaimedMessage(prisma, messageId);
   } finally {
     await releaseAutomationLease(prisma, lease);
   }
 }
 
-export async function reconcileStaleSends(prisma: PrismaClient, limit = 10) {
+export async function reconcileStaleSends(
+  prisma: PrismaClient,
+  limit = 10,
+  resendClaimed: (prisma: PrismaClient, messageId: number) => Promise<unknown> = sendClaimedMessage,
+) {
   const cutoff = new Date(Date.now() - STALE_SEND_MS);
   const messages = await prisma.outreachMessage.findMany({ where: { status: "sending", sendAttemptedAt: { lte: cutoff } }, orderBy: { sendAttemptedAt: "asc" }, take: limit, select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
@@ -152,7 +159,7 @@ export async function reconcileStaleSends(prisma: PrismaClient, limit = 10) {
     if (!lease) { results.push({ messageId: message.id, success: false, error: "Send lock busy" }); break; }
     try {
       await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendAttemptedAt: new Date() } });
-      await sendClaimedMessage(prisma, message.id);
+      await resendClaimed(prisma, message.id);
       results.push({ messageId: message.id, success: true });
     } catch (error) {
       results.push({ messageId: message.id, success: false, error: error instanceof Error ? error.message : String(error) });
