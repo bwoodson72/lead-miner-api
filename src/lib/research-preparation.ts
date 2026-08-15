@@ -170,15 +170,16 @@ export async function prepareLeadForResearch(
 /**
  * Core research contact gate. Every research path should use this instead of
  * assuming Lead.email was already populated by an outer route or batch worker.
- * It prepares the lead, then re-reads the full record so the AI always receives
- * the email that enrichment actually persisted.
+ * Starting research is an explicit request to prepare the lead now, so contact
+ * enrichment is forced for no-email leads even if a background retry is deferred
+ * or the previous automated pass was exhausted.
  */
 export async function getPreparedLeadForResearch(
   prisma: PrismaClient,
   leadId: number,
   enrich: EnrichLeadEmailFn = enrichLeadEmail,
   now = new Date(),
-  forceEmailEnrichment = false,
+  forceEmailEnrichment = true,
 ) {
   const preparation = await prepareLeadForResearch(prisma, leadId, enrich, now, forceEmailEnrichment);
   if (!preparation.ready) throw new ResearchPreparationError(preparation);
