@@ -168,6 +168,8 @@ model AppSettings {
   approvalMode String @default("manual") @map("approval_mode")
   researchModel String @default("gpt-5.6-luna") @map("research_model")
   outreachModel String @default("gpt-5.6-luna") @map("outreach_model")
+  researchInstructions String @default("Evaluate whether this business is a strong web-development prospect. Prioritize concrete website problems that create business friction, weak credibility, poor conversion paths, weak local-search foundations, or wasted paid-traffic opportunity. Prefer problems that can support a specific outreach angle. Disqualify businesses that are clearly a poor fit or have no meaningful web opportunity.") @map("research_instructions")
+  outreachInstructions String @default("Write a concise personalized cold email in plain business language. Focus on one specific problem and why it matters to the business. Do not dump an audit or use technical jargon. Avoid generic compliments, fake familiarity, hype, and placeholders. Use a low-friction call to action aimed at starting a conversation or booking a consultation.") @map("outreach_instructions")
   researchBatchSize Int @default(10) @map("research_batch_size")
   minAutoApprovePriority Int @default(75) @map("min_auto_approve_priority")
   minAutoApproveConfidence Float @default(0.85) @map("min_auto_approve_confidence")
