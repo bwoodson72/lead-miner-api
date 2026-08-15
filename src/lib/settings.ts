@@ -17,23 +17,17 @@ export const AppSettingsInputSchema = z.object({
   sendWindowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   sendWindowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   followUpDelaysDays: z.array(z.number().int().min(1).max(90)).min(1).max(10),
+  senderName: z.string().min(1).max(100),
+  senderEmail: z.string().email().max(254),
 });
 
 export type AppSettingsInput = z.infer<typeof AppSettingsInputSchema>;
 
 export async function getAppSettings(prisma: PrismaClient) {
-  return prisma.appSettings.upsert({
-    where: { id: 1 },
-    update: {},
-    create: { id: 1 },
-  });
+  return prisma.appSettings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
 }
 
 export async function updateAppSettings(prisma: PrismaClient, input: unknown) {
   const parsed = AppSettingsInputSchema.parse(input);
-  return prisma.appSettings.upsert({
-    where: { id: 1 },
-    update: parsed,
-    create: { id: 1, ...parsed },
-  });
+  return prisma.appSettings.upsert({ where: { id: 1 }, update: parsed, create: { id: 1, ...parsed } });
 }
