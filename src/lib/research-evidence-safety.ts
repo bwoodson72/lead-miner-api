@@ -33,12 +33,21 @@ function lowerOutreachValue(value: "low" | "medium" | "high", ceiling: "low" | "
   return value === "high" ? "medium" as const : value;
 }
 
-export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(problem: T): T {
-  const sources = problem.evidenceSources ?? [];
-  const onlyUnverifiedDom = sources.length > 0 && sources.every((source) => UNVERIFIED_DOM_SOURCES.has(source));
-  const looksLikeTemplateContamination = TEMPLATE_CONTAMINATION.test(`${problem.category} ${problem.title} ${problem.evidence}`);
+export function containsTemplateContamination(value: string | null | undefined) {
+  return Boolean(value && TEMPLATE_CONTAMINATION.test(value));
+}
 
-  if (onlyUnverifiedDom && looksLikeTemplateContamination) {
+export function isUnverifiedDomOnly(problem: EvidenceSafetyProblem) {
+  const sources = problem.evidenceSources ?? [];
+  return sources.length > 0 && sources.every((source) => UNVERIFIED_DOM_SOURCES.has(source));
+}
+
+export function isUnverifiedTemplateProblem(problem: EvidenceSafetyProblem) {
+  return isUnverifiedDomOnly(problem) && containsTemplateContamination(`${problem.category} ${problem.title} ${problem.evidence}`);
+}
+
+export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(problem: T): T {
+  if (isUnverifiedTemplateProblem(problem)) {
     return {
       ...problem,
       confidence: Math.min(problem.confidence, 0.4),
@@ -46,7 +55,7 @@ export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(pro
     };
   }
 
-  if (onlyUnverifiedDom) {
+  if (isUnverifiedDomOnly(problem)) {
     return {
       ...problem,
       confidence: Math.min(problem.confidence, 0.65),
@@ -63,9 +72,9 @@ export function isSafePrimaryOutreachProblem(problem: EvidenceSafetyProblem) {
 
 export function sanitizePrimaryOutreachAngle(angle: string | null, problems: EvidenceSafetyProblem[]) {
   if (!angle) return null;
-  if (!TEMPLATE_CONTAMINATION.test(angle)) return angle;
+  if (!containsTemplateContamination(angle)) return angle;
   const corroborated = problems.some((problem) => {
-    if (!TEMPLATE_CONTAMINATION.test(`${problem.category} ${problem.title} ${problem.evidence}`)) return false;
+    if (!containsTemplateContamination(`${problem.category} ${problem.title} ${problem.evidence}`)) return false;
     return problem.evidenceSources.some((source) => !UNVERIFIED_DOM_SOURCES.has(source)) && isSafePrimaryOutreachProblem(problem);
   });
   return corroborated ? angle : null;
