@@ -13,6 +13,9 @@ const envSchema = z.object({
   CRON_SECRET: z.string().min(1).optional(),
   ALLOWED_ORIGINS: z.string().optional().default("http://localhost:3000"),
   OPENAI_API_KEY: z.string().min(1).optional(),
+  GMAIL_CLIENT_ID: z.string().min(1).optional(),
+  GMAIL_CLIENT_SECRET: z.string().min(1).optional(),
+  GMAIL_REFRESH_TOKEN: z.string().min(1).optional(),
 });
 
 type Env = z.infer<typeof envSchema>;
