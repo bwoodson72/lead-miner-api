@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { prepareLeadForResearch } from "../src/lib/research-preparation.js";
+import {
+  getPreparedLeadForResearch,
+  prepareLeadForResearch,
+  ResearchPreparationError,
+} from "../src/lib/research-preparation.js";
 
 function fakePrisma(lead: any) {
   return {
@@ -102,4 +106,63 @@ test("completed enrichment with no email blocks AI research", async () => {
   assert.equal(result.ready, false);
   assert.equal(result.status, "exhausted");
   assert.equal(result.enrichmentAttempted, true);
+});
+
+test("core research gate enriches a no-email lead and re-reads the persisted address", async () => {
+  let storedLead: any = {
+    id: 7,
+    email: null,
+    emailEnrichmentStatus: "pending",
+    emailEnrichmentReason: null,
+    nextEmailEnrichmentAt: null,
+    businessName: "Example Roofing",
+  };
+  let reads = 0;
+  let enrichCalls = 0;
+  const prisma = {
+    lead: {
+      async findUnique() {
+        reads += 1;
+        return { ...storedLead };
+      },
+    },
+  } as any;
+
+  const prepared = await getPreparedLeadForResearch(
+    prisma,
+    7,
+    (async () => {
+      enrichCalls += 1;
+      storedLead = {
+        ...storedLead,
+        email: "hello@exampleroofing.com",
+        emailEnrichmentStatus: "found",
+        emailEnrichmentReason: "email_discovered",
+      };
+      return { leadId: 7, email: storedLead.email, found: true, alreadyPresent: false, status: "found", attempts: 1, nextRetryAt: null };
+    }) as any,
+  );
+
+  assert.equal(enrichCalls, 1);
+  assert.equal(reads, 2);
+  assert.equal(prepared.preparation.status, "email_found");
+  assert.equal(prepared.lead.email, "hello@exampleroofing.com");
+});
+
+test("core research gate refuses to start AI if enrichment claims success without persisting email", async () => {
+  const prisma = fakePrisma({ id: 8, email: null, emailEnrichmentStatus: "pending", emailEnrichmentReason: null, nextEmailEnrichmentAt: null });
+
+  await assert.rejects(
+    () => getPreparedLeadForResearch(
+      prisma,
+      8,
+      (async () => ({ leadId: 8, email: "ghost@example.com", found: true, alreadyPresent: false, status: "found", attempts: 1, nextRetryAt: null })) as any,
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof ResearchPreparationError);
+      assert.equal(error.preparation.status, "failed");
+      assert.match(error.message, /no email was persisted/i);
+      return true;
+    },
+  );
 });
