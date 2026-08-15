@@ -3,55 +3,53 @@ generator client {
   output    = "../src/generated/prisma"
 }
 
-datasource db {
-  provider = "postgresql"
-}
+datasource db { provider = "postgresql" }
 
 model Lead {
-  id               Int       @id @default(autoincrement())
-  domain           String    @unique
-  businessName     String?   @map("business_name")
-  landingPageUrl   String    @map("landing_page_url")
-  keyword          String
-  adSource         String    @default("local_organic") @map("ad_source")
-  lighthouseScore  Int       @map("lighthouse_score")
-  lcp              Int
-  cls              Float?
-  tbt              Int?
-  email            String?
-  phone            String?
-  address          String?
-  contactPageUrl   String?   @map("contact_page_url")
-  enrichmentStatus String?   @map("enrichment_status")
-  enrichmentNotes  String?   @map("enrichment_notes")
-  isAgencyManaged  Boolean   @default(false) @map("is_agency_managed")
-  agencyName       String?   @map("agency_name")
-  isNationalChain  Boolean   @default(false) @map("is_national_chain")
-  chainReason      String?   @map("chain_reason")
-  status                String    @default("new")
-  qualificationDecision String?   @map("qualification_decision")
-  qualificationReason   String?   @map("qualification_reason")
-  priorityScore         Int?      @map("priority_score")
-  primaryOutreachAngle  String?   @map("primary_outreach_angle")
-  researchSummary       String?   @map("research_summary")
-  researchVersion       String?   @map("research_version")
-  lastResearchedAt      DateTime? @map("last_researched_at")
-  replyStatus           String?   @map("reply_status")
-  replySummary          String?   @map("reply_summary")
-  lastReplyAt           DateTime? @map("last_reply_at")
-  outreachCount    Int       @default(0) @map("outreach_count")
-  firstContactAt   DateTime? @map("first_contact_at")
+  id Int @id @default(autoincrement())
+  domain String @unique
+  businessName String? @map("business_name")
+  landingPageUrl String @map("landing_page_url")
+  keyword String
+  adSource String @default("local_organic") @map("ad_source")
+  lighthouseScore Int @map("lighthouse_score")
+  lcp Int
+  cls Float?
+  tbt Int?
+  email String?
+  phone String?
+  address String?
+  contactPageUrl String? @map("contact_page_url")
+  enrichmentStatus String? @map("enrichment_status")
+  enrichmentNotes String? @map("enrichment_notes")
+  isAgencyManaged Boolean @default(false) @map("is_agency_managed")
+  agencyName String? @map("agency_name")
+  isNationalChain Boolean @default(false) @map("is_national_chain")
+  chainReason String? @map("chain_reason")
+  status String @default("new")
+  qualificationDecision String? @map("qualification_decision")
+  qualificationReason String? @map("qualification_reason")
+  priorityScore Int? @map("priority_score")
+  primaryOutreachAngle String? @map("primary_outreach_angle")
+  researchSummary String? @map("research_summary")
+  researchVersion String? @map("research_version")
+  lastResearchedAt DateTime? @map("last_researched_at")
+  replyStatus String? @map("reply_status")
+  replySummary String? @map("reply_summary")
+  lastReplyAt DateTime? @map("last_reply_at")
+  outreachCount Int @default(0) @map("outreach_count")
+  firstContactAt DateTime? @map("first_contact_at")
   lastOutreachDate DateTime? @map("last_outreach_date")
-  followUpDate     DateTime? @map("follow_up_date")
-  notes            Json      @default("[]")
-  problems         LeadProblem[]
-  scores           LeadScore[]
-  activities       Activity[]
+  followUpDate DateTime? @map("follow_up_date")
+  notes Json @default("[]")
+  problems LeadProblem[]
+  scores LeadScore[]
+  activities Activity[]
   outreachMessages OutreachMessage[]
-  aiJobs           AIJob[]
-  suppressions     Suppression[]
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  aiJobs AIJob[]
+  suppressions Suppression[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   @@index([status])
   @@index([qualificationDecision, priorityScore])
   @@index([followUpDate, status])
@@ -162,21 +160,23 @@ model AIJob {
 }
 
 model AppSettings {
-  id                       Int      @id @default(1)
-  autoResearch             Boolean  @default(true) @map("auto_research")
-  autoDraftOutreach        Boolean  @default(true) @map("auto_draft_outreach")
-  approvalMode             String   @default("manual") @map("approval_mode")
-  researchModel            String   @default("gpt-5.6-luna") @map("research_model")
-  outreachModel            String   @default("gpt-5.6-luna") @map("outreach_model")
-  researchBatchSize        Int      @default(10) @map("research_batch_size")
-  minAutoApprovePriority   Int      @default(75) @map("min_auto_approve_priority")
-  minAutoApproveConfidence Float    @default(0.85) @map("min_auto_approve_confidence")
-  minProblemConfidence     Float    @default(0.70) @map("min_problem_confidence")
-  dailySendLimit           Int      @default(40) @map("daily_send_limit")
-  sendWindowStart          String   @default("09:00") @map("send_window_start")
-  sendWindowEnd            String   @default("16:30") @map("send_window_end")
-  followUpDelaysDays       Json     @default("[4,6,10]") @map("follow_up_delays_days")
-  createdAt                DateTime @default(now()) @map("created_at")
-  updatedAt                DateTime @updatedAt @map("updated_at")
+  id Int @id @default(1)
+  autoResearch Boolean @default(true) @map("auto_research")
+  autoDraftOutreach Boolean @default(true) @map("auto_draft_outreach")
+  approvalMode String @default("manual") @map("approval_mode")
+  researchModel String @default("gpt-5.6-luna") @map("research_model")
+  outreachModel String @default("gpt-5.6-luna") @map("outreach_model")
+  researchBatchSize Int @default(10) @map("research_batch_size")
+  minAutoApprovePriority Int @default(75) @map("min_auto_approve_priority")
+  minAutoApproveConfidence Float @default(0.85) @map("min_auto_approve_confidence")
+  minProblemConfidence Float @default(0.70) @map("min_problem_confidence")
+  dailySendLimit Int @default(40) @map("daily_send_limit")
+  sendWindowStart String @default("09:00") @map("send_window_start")
+  sendWindowEnd String @default("16:30") @map("send_window_end")
+  followUpDelaysDays Json @default("[4,6,10]") @map("follow_up_delays_days")
+  senderName String @default("Brian Woodson") @map("sender_name")
+  senderEmail String @default("leads@brianwoodson.dev") @map("sender_email")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   @@map("app_settings")
 }
