@@ -5,7 +5,15 @@ import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { registerEnrichmentRoutes } from "./enrichment-routes.js";
-import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
+import { acquireAutomationLease, acquireAutomationSlot, releaseAutomationLease } from "./automation-lock.js";
+import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
+
+async function withAiCapacity<T>(prisma: PrismaClient, operation: () => Promise<T>): Promise<T> {
+  const slot = await acquireAutomationSlot(prisma, "ai-work", SAFETY_LIMITS.aiResearchConcurrency, 10 * 60_000);
+  if (!slot) throw new Error(`AI concurrency limit reached (${SAFETY_LIMITS.aiResearchConcurrency})`);
+  try { return await operation(); }
+  finally { await releaseAutomationLease(prisma, slot); }
+}
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -16,7 +24,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   if (existing) { if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } }); return existing; }
   const aiJob = await prisma.aIJob.create({ data: { leadId, type: "outreach_draft", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_PROMPT_VERSION, startedAt: new Date() } });
   try {
-    const generated = await generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions);
+    const generated = await withAiCapacity(prisma, () => generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions));
     const shouldAutoApprove = settings.approvalMode === "auto_safe" && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority && generated.draft.confidence >= settings.minAutoApproveConfidence;
     const status = shouldAutoApprove ? "approved" : "draft";
     return prisma.$transaction(async (tx) => {
@@ -44,7 +52,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
     const settings = await getAppSettings(prisma);
     const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
     try {
-      const { result, model, inputTokens, outputTokens } = await researchLead(lead, settings.researchModel, settings.researchInstructions);
+      const { result, model, inputTokens, outputTokens } = await withAiCapacity(prisma, () => researchLead(lead, settings.researchModel, settings.researchInstructions));
       const priorityScore = calculatePriority(result.scores);
       const nextStatus = result.decision === "qualified" ? "qualified" : result.decision === "disqualified" ? "disqualified" : lead.status;
       await prisma.$transaction(async (tx) => {
@@ -70,6 +78,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
 }
 
 export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10) {
+  const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
   const leads = await prisma.lead.findMany({
     where: {
       email: { not: null },
@@ -78,7 +87,7 @@ export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10
       aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
     },
     orderBy: { createdAt: "asc" },
-    take: limit,
+    take: safeLimit,
     select: { id: true },
   });
   const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number; draftId?: number; error?: string }> = [];
@@ -107,12 +116,14 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   });
   app.post("/api/leads/bulk-research", async (req, res) => {
     const requested = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => Number.isInteger(id)) as number[] : [];
+    if (requested.length > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Bulk research is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
     const settings = await getAppSettings(prisma);
+    const batchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.bulkResearchMax);
     const leads = requested.length
-      ? await prisma.lead.findMany({ where: { id: { in: requested }, email: { not: null } }, take: settings.researchBatchSize, select: { id: true } })
-      : await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, email: { not: null } }, orderBy: { createdAt: "asc" }, take: settings.researchBatchSize, select: { id: true } });
+      ? await prisma.lead.findMany({ where: { id: { in: requested }, email: { not: null } }, take: batchLimit, select: { id: true } })
+      : await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, email: { not: null } }, orderBy: { createdAt: "asc" }, take: batchLimit, select: { id: true } });
     const results: Array<{ id:number; success:boolean; decision?:string; priorityScore?:number; error?:string }> = [];
     for (const lead of leads) { try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); } catch (error) { results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
-    res.json({ processed: results.length, skippedNoEmail: requested.length ? requested.length - leads.length : undefined, results });
+    res.json({ processed: results.length, cap: batchLimit, skippedNoEmail: requested.length ? requested.length - leads.length : undefined, results });
   });
 }
