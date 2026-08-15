@@ -8,22 +8,10 @@ import { estimateAiCost } from "./ai-cost.js";
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
   if (!settings.autoDraftOutreach) return null;
-
-  const lead = await prisma.lead.findUnique({
-    where: { id: leadId },
-    include: { problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] } },
-  });
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] } } });
   if (!lead || lead.qualificationDecision !== "qualified" || !lead.email) return null;
-
-  const existing = await prisma.outreachMessage.findFirst({
-    where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } },
-    orderBy: { generatedAt: "desc" },
-  });
-  if (existing) {
-    if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
-    return existing;
-  }
-
+  const existing = await prisma.outreachMessage.findFirst({ where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } }, orderBy: { generatedAt: "desc" } });
+  if (existing) { if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } }); return existing; }
   const aiJob = await prisma.aIJob.create({ data: { leadId, type: "outreach_draft", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_PROMPT_VERSION, startedAt: new Date() } });
   try {
     const generated = await generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions);
@@ -47,6 +35,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
 export async function processLeadResearch(prisma: PrismaClient, leadId: number) {
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead) throw new Error("Lead not found");
+  if (!lead.email) throw new Error("Lead has no email; contact enrichment must succeed before AI research");
   const settings = await getAppSettings(prisma);
   const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
   try {
@@ -81,14 +70,15 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
     try { await processLeadResearch(prisma, id); res.json(await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } })); }
-    catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.post("/api/leads/bulk-research", async (req, res) => {
     const requested = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => Number.isInteger(id)) : [];
     const settings = await getAppSettings(prisma);
-    const leads = requested.length ? await prisma.lead.findMany({ where: { id: { in: requested } }, take: settings.researchBatchSize, select: { id: true } }) : await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] } }, orderBy: { createdAt: "asc" }, take: settings.researchBatchSize, select: { id: true } });
+    const where = requested.length ? { id: { in: requested }, email: { not: null as null | string } } : { status: { in: ["new", "research_pending"] }, email: { not: null as null | string } };
+    const leads = await prisma.lead.findMany({ where: where as any, orderBy: requested.length ? undefined : { createdAt: "asc" }, take: settings.researchBatchSize, select: { id: true } });
     const results: Array<{ id:number; success:boolean; decision?:string; priorityScore?:number; error?:string }> = [];
     for (const lead of leads) { try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); } catch (error) { results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
-    res.json({ processed: results.length, results });
+    res.json({ processed: results.length, skippedNoEmail: requested.length ? requested.length - leads.length : undefined, results });
   });
 }
