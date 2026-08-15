@@ -6,9 +6,12 @@ import { reconcileStaleSends, sendApprovedQueue } from "./outreach-sending.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
+import { RESEARCH_VERSION } from "./ai-research.js";
 import { SAFETY_LIMITS } from "./safety-limits.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
+
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4"];
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   registerResearchMaintenanceRoutes(app, prisma);
@@ -28,7 +31,7 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
         sendingMessages,
         followupsDue,
         unhandledReplies,
-        staleResearchV3,
+        staleResearch,
       ] = await Promise.all([
         prisma.lead.count({
           where: {
@@ -52,12 +55,14 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
         prisma.outreachMessage.count({ where: { status: "sending" } }),
         prisma.lead.count({ where: { status: "contacted", followUpDate: { lte: now }, replyStatus: null } }),
         prisma.lead.count({ where: { replyStatus: { not: null }, replyHandledAt: null } }),
-        prisma.lead.count({ where: { researchVersion: "lead-research-v3", email: { not: null } } }),
+        prisma.lead.count({ where: { researchVersion: { in: STALE_RESEARCH_VERSIONS }, email: { not: null } } }),
       ]);
 
       res.json({
         automationEnabled: policy.automationEnabled,
         sendAutomationEnabled: policy.sendAutomationEnabled,
+        researchVersion: RESEARCH_VERSION,
+        staleResearchVersions: STALE_RESEARCH_VERSIONS,
         settings: {
           autoResearch: settings.autoResearch,
           autoDraftOutreach: settings.autoDraftOutreach,
@@ -75,7 +80,7 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
           sendingMessages,
           followupsDue,
           unhandledReplies,
-          staleResearchV3,
+          staleResearch,
         },
         hardLimits: {
           replySync: SAFETY_LIMITS.automationReplySyncMax,
