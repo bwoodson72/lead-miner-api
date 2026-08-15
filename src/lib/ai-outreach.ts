@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
+import { containsUnsupportedFormAbsenceClaim } from "./research-evidence-safety.js";
 
 const OutreachDraftSchema = z.object({
   subject: z.string().min(1).max(120),
@@ -11,7 +12,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v4";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v5";
 
 function schema() {
   return {
@@ -58,6 +59,10 @@ export async function generateOutreachDraft(input: {
   problems: Array<{ title: string; evidence: string; businessConsequence: string; confidence: number; outreachValue: string }>;
 }, model: string, minProblemConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; outputTokens?: number }> {
   const vettedProblems = input.problems
+    // The current research crawler does not inspect every linked contact/request
+    // page, so site-wide "no form" claims are not evidence-backed. Filter them
+    // again here so older stored research cannot leak into a new draft.
+    .filter((p) => !containsUnsupportedFormAbsenceClaim(`${p.title} ${p.evidence} ${p.businessConsequence}`))
     .filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low")
     .slice(0, 4)
     .map((p) => ({
@@ -78,7 +83,9 @@ export async function generateOutreachDraft(input: {
     businessName: input.businessName,
     domain: input.domain,
     keyword: input.keyword,
-    primaryOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle),
+    primaryOutreachAngle: containsUnsupportedFormAbsenceClaim(input.primaryOutreachAngle)
+      ? null
+      : sanitizeProspectFacingEvidence(input.primaryOutreachAngle),
     problems: vettedProblems,
   };
 
