@@ -1,19 +1,18 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { ensureInitialOutreachDraft, processLeadResearch } from "./research-routes.js";
+import { processLeadResearch } from "./research-routes.js";
+import { RESEARCH_VERSION } from "./ai-research.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
-const STALE_RESEARCH_VERSION = "lead-research-v3";
-const TARGET_RESEARCH_VERSION = "lead-research-v4";
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4"];
 const SAFE_MAINTENANCE_STATUSES = ["new", "research_pending", "qualified", "disqualified", "ready_for_outreach"];
 
 type ProcessResearchFn = typeof processLeadResearch;
-type EnsureDraftFn = typeof ensureInitialOutreachDraft;
 
 function staleResearchWhere() {
   return {
-    researchVersion: STALE_RESEARCH_VERSION,
+    researchVersion: { in: STALE_RESEARCH_VERSIONS },
     email: { not: null },
     status: { in: SAFE_MAINTENANCE_STATUSES },
     outreachMessages: { none: { status: { in: ["sending", "sent"] } } },
@@ -24,93 +23,54 @@ export async function refreshStaleResearch(
   prisma: PrismaClient,
   limit = 10,
   processResearch: ProcessResearchFn = processLeadResearch,
-  ensureDraft: EnsureDraftFn = ensureInitialOutreachDraft,
 ) {
   const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
   const leads = await prisma.lead.findMany({
     where: staleResearchWhere(),
     orderBy: [{ lastResearchedAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
     take: safeLimit,
-    select: { id: true },
+    select: { id: true, researchVersion: true },
   });
 
   const results: Array<{
     leadId: number;
+    previousResearchVersion: string | null;
     success: boolean;
     decision?: string;
-    staleDraftsCancelled?: number;
+    invalidatedDrafts?: number;
     replacementDraftId?: number;
-    draftError?: string;
     error?: string;
   }> = [];
 
   for (const lead of leads) {
-    const staleMessages = await prisma.outreachMessage.findMany({
-      where: {
-        leadId: lead.id,
-        kind: "initial",
-        sequenceNumber: 1,
-        status: { in: ["draft", "approved"] },
-      },
-      select: { id: true },
-    });
-
     try {
       const processed = await processResearch(prisma, lead.id);
-      let staleDraftsCancelled = 0;
-      let replacementDraftId: number | undefined;
-      let draftError: string | undefined;
-
-      if (staleMessages.length) {
-        const staleIds = staleMessages.map((message) => message.id);
-        const cancelled = await prisma.outreachMessage.updateMany({
-          where: { id: { in: staleIds }, status: { in: ["draft", "approved"] } },
-          data: { status: "cancelled" },
-        });
-        staleDraftsCancelled = cancelled.count;
-
-        if (staleDraftsCancelled) {
-          await prisma.activity.create({
-            data: {
-              leadId: lead.id,
-              type: "stale_research_outreach_cancelled",
-              summary: `Cancelled ${staleDraftsCancelled} unsent outreach message(s) after ${TARGET_RESEARCH_VERSION} refresh`,
-              metadata: { staleResearchVersion: STALE_RESEARCH_VERSION, targetResearchVersion: TARGET_RESEARCH_VERSION, messageIds: staleIds },
-            },
-          });
-        }
-      }
-
-      if (processed.result.decision === "qualified" && staleDraftsCancelled > 0) {
-        try {
-          const replacement = await ensureDraft(prisma, lead.id);
-          replacementDraftId = replacement?.id;
-        } catch (error) {
-          draftError = error instanceof Error ? error.message : String(error);
-        }
-      }
-
       results.push({
         leadId: lead.id,
+        previousResearchVersion: lead.researchVersion,
         success: true,
         decision: processed.result.decision,
-        staleDraftsCancelled,
-        replacementDraftId,
-        draftError,
+        invalidatedDrafts: processed.invalidatedDrafts,
+        replacementDraftId: processed.draft?.id,
       });
     } catch (error) {
-      results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) });
+      results.push({
+        leadId: lead.id,
+        previousResearchVersion: lead.researchVersion,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
   const remaining = await prisma.lead.count({ where: staleResearchWhere() });
   return {
-    staleResearchVersion: STALE_RESEARCH_VERSION,
-    targetResearchVersion: TARGET_RESEARCH_VERSION,
+    staleResearchVersions: STALE_RESEARCH_VERSIONS,
+    targetResearchVersion: RESEARCH_VERSION,
     selected: leads.length,
     refreshed: results.filter((result) => result.success).length,
     failed: results.filter((result) => !result.success).length,
-    staleDraftsCancelled: results.reduce((sum, result) => sum + (result.staleDraftsCancelled ?? 0), 0),
+    invalidatedDrafts: results.reduce((sum, result) => sum + (result.invalidatedDrafts ?? 0), 0),
     replacementDraftsGenerated: results.filter((result) => result.replacementDraftId).length,
     remaining,
     results,
@@ -118,7 +78,7 @@ export async function refreshStaleResearch(
 }
 
 export function registerResearchMaintenanceRoutes(app: Express, prisma: PrismaClient) {
-  app.post("/api/maintenance/research-v4", async (req, res) => {
+  const handler = async (req: any, res: any) => {
     const auth = authorizeCronRequest(req.headers.authorization);
     if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
 
@@ -140,5 +100,8 @@ export function registerResearchMaintenanceRoutes(app: Express, prisma: PrismaCl
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
-  });
+  };
+
+  app.post("/api/maintenance/research-current", handler);
+  app.post("/api/maintenance/research-v5", handler);
 }
