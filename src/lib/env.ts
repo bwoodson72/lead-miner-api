@@ -13,8 +13,11 @@ const envSchema = z.object({
   CRON_SECRET: z.string().min(1).optional(),
   ALLOWED_ORIGINS: z.string().optional().default("http://localhost:3000"),
   OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_RESEARCH_MODEL: z.string().min(1).optional().default("gpt-5.6"),
+  OPENAI_RESEARCH_MODEL: z.string().min(1).optional().default("gpt-5.6-luna"),
+  OPENAI_OUTREACH_MODEL: z.string().min(1).optional().default("gpt-5.6-luna"),
   AI_RESEARCH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional().default(10),
+  AUTO_RESEARCH: z.coerce.boolean().optional().default(true),
+  AUTO_DRAFT_OUTREACH: z.coerce.boolean().optional().default(true),
 });
 
 type Env = z.infer<typeof envSchema>;
