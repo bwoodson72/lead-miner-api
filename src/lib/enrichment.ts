@@ -1,5 +1,6 @@
 import { detectAgency } from "./agency-filter.js";
 import { detectNationalChain } from "./chain-filter.js";
+import { getEnv } from "./env.js";
 
 export type EnrichmentResult = {
   businessName?: string;
@@ -15,152 +16,238 @@ export type EnrichmentResult = {
   chainReason?: string;
 };
 
-export type EnrichmentInput = {
-  url: string;
-  existingBusinessName?: string;
-};
+export type EnrichmentInput = { url: string; existingBusinessName?: string };
 
-async function fetchHtml(url: string, timeoutMs = 10_000): Promise<string | null> {
+type FetchResult = { html: string; finalUrl: string } | null;
+
+function browserHeaders() {
+  return {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+  };
+}
+
+async function fetchHtml(url: string, timeoutMs = 8_000, quiet404 = false): Promise<FetchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; LeadEnrichmentBot/1.0)" }, redirect: "follow" });
-    if (!response.ok) { console.log(`[Enrichment] Fetch failed for ${url}: ${response.status}`); return null; }
-    return await response.text();
+    const response = await fetch(url, { signal: controller.signal, headers: browserHeaders(), redirect: "follow" });
+    if (!response.ok) {
+      if (!(quiet404 && response.status === 404)) console.log(`[Enrichment] Fetch failed for ${url}: ${response.status}`);
+      return null;
+    }
+    return { html: await response.text(), finalUrl: response.url || url };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") console.log(`[Enrichment] Timeout fetching ${url}`);
-    else console.log(`[Enrichment] Error fetching ${url}:`, err);
+    else console.log(`[Enrichment] Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   } finally { clearTimeout(timer); }
 }
 
-function extractBusinessName(html: string): string | undefined {
-  const ogSiteNameMatch = html.match(/<meta[^>]*property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i);
-  if (ogSiteNameMatch?.[1]) return ogSiteNameMatch[1].trim();
-  const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is);
-  if (titleMatch?.[1]) { const title = titleMatch[1].trim().replace(/\s+/g, " "); if (title.length > 3 && title.length < 100) return title; }
-  const h1Match = html.match(/<h1[^>]*>(.*?)<\/h1>/is);
-  if (h1Match?.[1]) { const h1Text = h1Match[1].replace(/<[^>]+>/g, "").trim().replace(/\s+/g, " "); if (h1Text.length > 3 && h1Text.length < 100) return h1Text; }
-  return undefined;
+function rootVariants(input: string): string[] {
+  try {
+    const u = new URL(input);
+    const host = u.hostname.replace(/^www\./, "");
+    return Array.from(new Set([
+      input,
+      `https://${host}/`,
+      `https://www.${host}/`,
+      `http://${host}/`,
+      `http://www.${host}/`,
+    ]));
+  } catch { return [input]; }
 }
 
-function isValidEmail(email: string): boolean { return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email); }
-function isCommonPlaceholder(email: string): boolean {
-  const placeholders = ["example.com", "test.com", "demo.com", "yoursite.com", "yourdomain.com", "business.com", "company.com", "website.com", "email.com", "mail.com", "domain.com", "site.com", "mysite.com", "mycompany.com", "mybusiness.com", "mailservice.com"];
-  if (/\.(png|jpg|webp|svg|gif)$/i.test(email)) return true;
-  return placeholders.some((p) => email.endsWith(p));
+async function fetchHomepage(input: string): Promise<FetchResult> {
+  for (const candidate of rootVariants(input)) {
+    const result = await fetchHtml(candidate);
+    if (result) return result;
+  }
+  return null;
+}
+
+function extractBusinessName(html: string): string | undefined {
+  const og = html.match(/<meta[^>]*property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i);
+  if (og?.[1]) return og[1].trim();
+  const title = html.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]?.replace(/<[^>]+>/g, "").trim().replace(/\s+/g, " ");
+  if (title && title.length > 3 && title.length < 120) return title;
+  const h1 = html.match(/<h1[^>]*>(.*?)<\/h1>/is)?.[1]?.replace(/<[^>]+>/g, "").trim().replace(/\s+/g, " ");
+  return h1 && h1.length > 3 && h1.length < 120 ? h1 : undefined;
+}
+
+function isValidEmail(email: string) { return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email); }
+function isCommonPlaceholder(email: string) {
+  const bad = ["example.com","test.com","demo.com","yoursite.com","yourdomain.com","business.com","company.com","website.com","email.com","mail.com","domain.com","site.com","mysite.com","mycompany.com","mybusiness.com","mailservice.com","sentry.io"];
+  return /\.(png|jpg|jpeg|webp|svg|gif)$/i.test(email) || bad.some((d) => email.endsWith(d));
+}
+
+function decodeCloudflareEmail(hex: string): string | null {
+  try {
+    const key = parseInt(hex.slice(0, 2), 16);
+    let out = "";
+    for (let i = 2; i < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    return isValidEmail(out) ? out.toLowerCase() : null;
+  } catch { return null; }
 }
 
 function extractEmails(html: string): string[] {
   const emails = new Set<string>();
-  const mailtoRegex = /href=["']mailto:([^"']+)["']/gi;
-  let match;
-  while ((match = mailtoRegex.exec(html)) !== null) {
-    const email = match[1]?.split("?")[0]?.trim().toLowerCase();
+  const add = (value: string | null | undefined) => {
+    const email = value?.trim().toLowerCase();
     if (email && isValidEmail(email) && !isCommonPlaceholder(email)) emails.add(email);
-  }
-  const textContent = html.replace(/<script[^>]*>.*?<\/script>/gis, " ");
-  for (const email of textContent.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) ?? []) {
-    const normalized = email.toLowerCase();
-    if (isValidEmail(normalized) && !isCommonPlaceholder(normalized)) emails.add(normalized);
-  }
-  // Recover common human-readable obfuscation: name [at] domain [dot] com.
-  const plain = textContent.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ");
+  };
+  let match: RegExpExecArray | null;
+  const mailto = /href=["']mailto:([^"']+)["']/gi;
+  while ((match = mailto.exec(html)) !== null) add(match[1]?.split("?")[0]);
+  for (const email of html.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) ?? []) add(email);
+  const cf = /data-cfemail=["']([0-9a-f]+)["']/gi;
+  while ((match = cf.exec(html)) !== null) add(decodeCloudflareEmail(match[1] ?? ""));
+  const plain = html.replace(/<script[^>]*>.*?<\/script>/gis, " ").replace(/<style[^>]*>.*?<\/style>/gis, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ");
   const obfuscated = /\b([a-z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\sat\s)\s*([a-z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\sdot\s)\s*([a-z]{2,})\b/gi;
-  while ((match = obfuscated.exec(plain)) !== null) {
-    const email = `${match[1]}@${match[2]}.${match[3]}`.toLowerCase();
-    if (isValidEmail(email) && !isCommonPlaceholder(email)) emails.add(email);
-  }
-  return Array.from(emails);
+  while ((match = obfuscated.exec(plain)) !== null) add(`${match[1]}@${match[2]}.${match[3]}`);
+  return [...emails];
 }
 
 function pickBestEmail(emails: string[], siteDomain: string): string | undefined {
   const filtered = emails.filter((e) => !isCommonPlaceholder(e));
   if (!filtered.length) return undefined;
-  const domainMatches = filtered.filter((e) => { const d = e.split("@")[1] ?? ""; return d === siteDomain || d.endsWith("." + siteDomain); });
-  const roleOrder = ["info", "contact", "hello", "sales", "office", "admin", "support"];
-  const ranked = (domainMatches.length ? domainMatches : filtered).sort((a, b) => {
-    const al = a.split("@")[0] ?? ""; const bl = b.split("@")[0] ?? "";
-    const ai = roleOrder.indexOf(al); const bi = roleOrder.indexOf(bl);
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  });
-  return ranked[0];
+  const sameDomain = filtered.filter((e) => { const d = e.split("@")[1] ?? ""; return d === siteDomain || d.endsWith(`.${siteDomain}`); });
+  const roleOrder = ["info","contact","hello","sales","office","admin","support","service","estimates"];
+  return [...(sameDomain.length ? sameDomain : filtered)].sort((a,b) => {
+    const ai = roleOrder.indexOf(a.split("@")[0] ?? ""); const bi = roleOrder.indexOf(b.split("@")[0] ?? "");
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  })[0];
 }
 
 function extractPhones(html: string): string[] {
-  const phones = new Set<string>(); let match;
-  const telRegex = /href=["']tel:([^"']+)["']/gi;
-  while ((match = telRegex.exec(html)) !== null) { const phone = match[1]?.trim(); if (phone) phones.add(phone.replace(/[^\d+]/g, "")); }
-  const phoneRegex = /(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/g;
-  const textContent = html.replace(/<script[^>]*>.*?<\/script>/gis, "");
-  while ((match = phoneRegex.exec(textContent)) !== null) phones.add(match[0].replace(/[^\d+]/g, ""));
-  return Array.from(phones);
+  const out = new Set<string>();
+  for (const m of html.matchAll(/href=["']tel:([^"']+)["']/gi)) if (m[1]) out.add(m[1].replace(/[^\d+]/g,""));
+  const text = html.replace(/<script[^>]*>.*?<\/script>/gis," ");
+  for (const m of text.matchAll(/(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/g)) out.add(m[0].replace(/[^\d+]/g,""));
+  return [...out];
 }
 
-function pickBestPhone(phones: string[], html: string): string | undefined {
-  const valid = phones.map((p) => { const digits = p.replace(/\D/g, ""); return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits; }).filter((d) => d.length === 10);
-  if (!valid.length) return undefined; if (valid.length === 1) return valid[0];
-  const counts = new Map<string, number>();
-  for (const digits of valid) { const pattern = digits.replace(/(\d{3})(\d{3})(\d{4})/, "$1.{0,2}$2.{0,2}$3"); counts.set(digits, (html.match(new RegExp(pattern, "g")) ?? []).length); }
-  return valid.reduce((best, cur) => (counts.get(cur)! > counts.get(best)! ? cur : best));
+function pickBestPhone(phones: string[]): string | undefined {
+  return phones.map((p) => p.replace(/\D/g,"" )).map((d) => d.length === 11 && d.startsWith("1") ? d.slice(1) : d).find((d) => d.length === 10);
 }
 
-function extractContactPages(html: string, baseUrl: string): string[] {
-  const pages: string[] = []; const keywords = ["contact", "about", "team", "staff", "locations", "reach", "get-in-touch", "quote", "estimate"];
-  const linkRegex = /<a[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis; let match;
-  while ((match = linkRegex.exec(html)) !== null) {
-    const href = match[1]; const text = match[2]?.replace(/<[^>]+>/g, "").trim().toLowerCase(); if (!href) continue;
-    if (!keywords.some((kw) => (text ?? "").includes(kw) || href.toLowerCase().includes(kw))) continue;
-    try { const resolved = new URL(href, baseUrl); if (resolved.origin === new URL(baseUrl).origin) pages.push(resolved.href); } catch { /* skip */ }
+function scoreContactUrl(url: string, text = "") {
+  const haystack = `${url} ${text}`.toLowerCase();
+  let score = 0;
+  if (/contact|get-in-touch|reach-us/.test(haystack)) score += 100;
+  if (/about|team|staff|our-company/.test(haystack)) score += 60;
+  if (/location|office/.test(haystack)) score += 40;
+  if (/quote|estimate/.test(haystack)) score += 30;
+  return score;
+}
+
+function discoverUsefulPages(html: string, baseUrl: string): string[] {
+  const base = new URL(baseUrl);
+  const rows: Array<{ url: string; score: number }> = [];
+  for (const m of html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    try {
+      const resolved = new URL(m[1] ?? "", baseUrl); resolved.hash = "";
+      if (resolved.hostname.replace(/^www\./,"") !== base.hostname.replace(/^www\./,"")) continue;
+      const text = (m[2] ?? "").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+      const score = scoreContactUrl(resolved.toString(), text);
+      if (score) rows.push({ url: resolved.toString(), score });
+    } catch { /* skip */ }
   }
-  return Array.from(new Set(pages)).slice(0, 8);
+  return [...new Map(rows.sort((a,b)=>b.score-a.score).map((r)=>[r.url,r])).values()].slice(0, 8).map((r)=>r.url);
 }
 
-function commonContactCandidates(baseUrl: string): string[] {
+function extractSitemapUrls(xml: string, origin: string): string[] {
+  const host = new URL(origin).hostname.replace(/^www\./,"");
+  const urls: string[] = [];
+  for (const m of xml.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)) {
+    try {
+      const u = new URL(m[1]!.trim());
+      if (u.hostname.replace(/^www\./,"") !== host) continue;
+      if (scoreContactUrl(u.toString())) urls.push(u.toString());
+    } catch { /* skip */ }
+  }
+  return urls.slice(0, 12);
+}
+
+async function discoverFromSitemap(baseUrl: string): Promise<string[]> {
   const origin = new URL(baseUrl).origin;
-  return ["/contact", "/contact-us", "/about", "/about-us", "/team", "/staff", "/locations", "/get-a-quote"].map((p) => new URL(p, origin).href);
+  const paths = ["/sitemap.xml","/sitemap_index.xml","/wp-sitemap.xml"];
+  const urls: string[] = [];
+  for (const path of paths) {
+    const result = await fetchHtml(new URL(path, origin).toString(), 5_000, true);
+    if (!result) continue;
+    urls.push(...extractSitemapUrls(result.html, origin));
+    if (urls.length >= 8) break;
+  }
+  return [...new Set(urls)].slice(0,8);
+}
+
+async function serperEmailSearch(domain: string, businessName?: string): Promise<string | undefined> {
+  const env = getEnv();
+  const queries = [`site:${domain} "@${domain}"`, businessName ? `"${businessName}" email` : `"${domain}" email`];
+  for (const q of queries) {
+    try {
+      const response = await fetch("https://google.serper.dev/search", { method:"POST", headers:{"X-API-KEY":env.SERPER_API_KEY,"Content-Type":"application/json"}, body:JSON.stringify({ q, gl:"us", hl:"en", num:10 }) });
+      if (!response.ok) continue;
+      const data = await response.json() as Record<string, unknown>;
+      const chunks: string[] = [];
+      for (const row of Array.isArray(data.organic) ? data.organic as Record<string,unknown>[] : []) chunks.push(String(row.title ?? ""), String(row.snippet ?? ""), String(row.link ?? ""));
+      chunks.push(JSON.stringify(data));
+      const best = pickBestEmail(extractEmails(chunks.join("\n")), domain);
+      if (best) return best;
+    } catch { /* search fallback is best-effort */ }
+  }
+  return undefined;
 }
 
 export async function enrichLeadFromSite(input: EnrichmentInput): Promise<EnrichmentResult> {
-  const { url, existingBusinessName } = input;
-  console.log(`[Enrichment] Starting enrichment for ${url}`);
   const startTime = Date.now(); const notes: string[] = [];
-  let businessName = existingBusinessName; let email: string | undefined; let phone: string | undefined; let contactPageUrl: string | undefined; let address: string | undefined;
+  console.log(`[Enrichment] Starting enrichment for ${input.url}`);
+  const homepage = await fetchHomepage(input.url);
+  if (!homepage) return { enrichmentStatus:"failed", enrichmentNotes:"Failed to fetch homepage across protocol/host variants" };
 
-  const homepageHtml = await fetchHtml(url);
-  if (!homepageHtml) return { enrichmentStatus: "failed", enrichmentNotes: "Failed to fetch homepage" };
-  notes.push("Fetched homepage");
+  const url = homepage.finalUrl;
+  const siteDomain = new URL(url).hostname.replace(/^www\./,"");
+  let businessName = input.existingBusinessName || extractBusinessName(homepage.html);
+  let email = pickBestEmail(extractEmails(homepage.html), siteDomain);
+  let phone = pickBestPhone(extractPhones(homepage.html));
+  let contactPageUrl: string | undefined;
+  notes.push(`Fetched ${url}`);
+  if (email) notes.push("Found email on homepage");
 
-  const siteDomain = new URL(url).hostname.replace(/^www\./, "");
-  const agencyDetection = detectAgency(homepageHtml);
-  const chainDetection = detectNationalChain(homepageHtml, undefined, siteDomain);
-  if (agencyDetection.isAgencyManaged) notes.push(`Agency detected: ${agencyDetection.agencyName}`);
-  if (chainDetection.isNationalChain) notes.push(`National chain detected: ${chainDetection.reason}`);
-  if (!businessName) { businessName = extractBusinessName(homepageHtml); if (businessName) notes.push("Extracted business name from homepage"); }
+  const agencyDetection = detectAgency(homepage.html);
+  const chainDetection = detectNationalChain(homepage.html, undefined, siteDomain);
 
-  const homepageEmails = extractEmails(homepageHtml);
-  if (homepageEmails.length) { email = pickBestEmail(homepageEmails, siteDomain); notes.push(`Found ${homepageEmails.length} email(s) on homepage`); }
-  const homepagePhones = extractPhones(homepageHtml);
-  if (homepagePhones.length) { phone = pickBestPhone(homepagePhones, homepageHtml); notes.push(`Found ${homepagePhones.length} phone(s) on homepage`); }
-
-  const discovered = extractContactPages(homepageHtml, url);
-  const candidates = Array.from(new Set([...discovered, ...(!email ? commonContactCandidates(url) : [])])).slice(0, email ? 3 : 8);
-  if (candidates.length) notes.push(`Queued ${candidates.length} contact/about candidate page(s)`);
-
-  for (const pageUrl of candidates) {
-    const pageHtml = await fetchHtml(pageUrl, 7_500); if (!pageHtml) continue;
-    notes.push(`Visited ${new URL(pageUrl).pathname}`);
-    if (!email) { const best = pickBestEmail(extractEmails(pageHtml), siteDomain); if (best) { email = best; contactPageUrl = pageUrl; notes.push("Found email on secondary page"); } }
-    if (!phone) { const best = pickBestPhone(extractPhones(pageHtml), pageHtml); if (best) { phone = best; if (!contactPageUrl) contactPageUrl = pageUrl; notes.push("Found phone on secondary page"); } }
-    if (email && phone) break;
+  if (!email) {
+    const realLinks = discoverUsefulPages(homepage.html, url);
+    const sitemapLinks = realLinks.length < 3 ? await discoverFromSitemap(url) : [];
+    const candidates = [...new Set([...realLinks, ...sitemapLinks])].slice(0,8);
+    if (candidates.length) notes.push(`Discovered ${candidates.length} real contact/about page(s)`);
+    for (const pageUrl of candidates) {
+      const page = await fetchHtml(pageUrl, 6_000, true);
+      if (!page) continue;
+      email ||= pickBestEmail(extractEmails(page.html), siteDomain);
+      phone ||= pickBestPhone(extractPhones(page.html));
+      if (email) { contactPageUrl = page.finalUrl; notes.push(`Found email on ${new URL(page.finalUrl).pathname}`); break; }
+    }
   }
 
-  const elapsed = Date.now() - startTime;
-  if (!email) notes.push("No usable email found; AI research should be skipped");
-  const enrichmentNotes = `${notes.join("; ")}; elapsed=${elapsed}ms`;
-  const hasAnyData = businessName || email || phone || contactPageUrl;
-  const enrichmentStatus = hasAnyData ? "enriched" : "failed";
-  console.log(`[Enrichment] Completed ${url} — status=${enrichmentStatus}, email=${email ? "yes" : "no"}, elapsed=${elapsed}ms`);
+  if (!email) {
+    email = await serperEmailSearch(siteDomain, businessName);
+    if (email) notes.push("Found email via search-index fallback");
+  }
 
-  return { ...(businessName && { businessName }), ...(contactPageUrl && { contactPageUrl }), ...(email && { email }), ...(phone && { phone }), ...(address && { address }), enrichmentStatus, enrichmentNotes, isAgencyManaged: agencyDetection.isAgencyManaged, ...(agencyDetection.agencyName && { agencyName: agencyDetection.agencyName }), isNationalChain: chainDetection.isNationalChain, ...(chainDetection.reason && { chainReason: chainDetection.reason }) };
+  if (!email) notes.push("No usable email found; AI research should be skipped");
+  const elapsed = Date.now() - startTime;
+  const enrichmentNotes = `${notes.join("; ")}; elapsed=${elapsed}ms`;
+  console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=${email ? "yes" : "no"}, elapsed=${elapsed}ms`);
+
+  return {
+    ...(businessName && { businessName }), ...(contactPageUrl && { contactPageUrl }), ...(email && { email }), ...(phone && { phone }),
+    enrichmentStatus:"enriched", enrichmentNotes,
+    isAgencyManaged: agencyDetection.isAgencyManaged, ...(agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
+    isNationalChain: chainDetection.isNationalChain, ...(chainDetection.reason && { chainReason:chainDetection.reason }),
+  };
 }
