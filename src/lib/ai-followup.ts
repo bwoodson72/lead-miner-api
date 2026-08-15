@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
+import { fetchWithProviderBackoff } from "./provider-retry.js";
 
 const FollowUpSchema = z.object({
   bodyText: z.string().min(1).max(2200),
@@ -45,7 +46,7 @@ export async function generateFollowUp(input: {
     priorMessages: input.priorMessages,
   };
   const hardRules = "Write only the body of a follow-up in the existing thread. Use only supplied evidence and prior messages. Never invent facts, metrics, traffic, revenue, ad spend, customer behavior, or a new website problem. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, benchmark scores, milliseconds, or technical performance scores. Do not use generic phrases such as just following up, checking in, circling back, touching base, or bumping this. Keep it concise, natural, and use one CTA. Do not generate a subject line.";
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -56,7 +57,7 @@ export async function generateFollowUp(input: {
       ],
       text: { format: { type: "json_schema", name: "followup_draft", strict: true, schema: jsonSchema() } },
     }),
-  });
+  }, "OpenAI follow-up");
   if (!response.ok) throw new Error(`OpenAI follow-up failed (${response.status}): ${await response.text()}`);
   const data = await response.json() as any;
   const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
