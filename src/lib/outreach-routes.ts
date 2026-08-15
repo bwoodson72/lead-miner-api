@@ -6,6 +6,7 @@ import { sendApprovedMessage, sendApprovedQueue } from "./outreach-sending.js";
 import { registerFollowupReplyRoutes } from "./followup-reply-routes.js";
 import { registerAutomationRoutes } from "./automation-routes.js";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
+import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
 export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   registerSettingsRoutes(app, prisma);
@@ -20,12 +21,15 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
-  app.post("/api/outreach/backfill-drafts", async (_req, res) => {
+  app.post("/api/outreach/backfill-drafts", async (req, res) => {
+    const requested = Number(req.body?.limit ?? SAFETY_LIMITS.bulkResearchMax);
+    if (Number.isFinite(requested) && requested > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Draft backfill is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
+    const limit = capRequestedLimit(requested, SAFETY_LIMITS.bulkResearchMax, SAFETY_LIMITS.bulkResearchMax);
     try {
-      const leads = await prisma.lead.findMany({ where: { qualificationDecision: "qualified", email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: 25, select: { id: true } });
+      const leads = await prisma.lead.findMany({ where: { qualificationDecision: "qualified", email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: limit, select: { id: true } });
       const results: Array<{ leadId:number; success:boolean; messageId?:number; error?:string }> = [];
       for (const lead of leads) { try { const message = await ensureInitialOutreachDraft(prisma, lead.id); results.push({ leadId: lead.id, success: true, messageId: message?.id }); } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
-      res.json({ processed: results.length, results });
+      res.json({ processed: results.length, cap: SAFETY_LIMITS.bulkResearchMax, results });
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
@@ -52,8 +56,10 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   });
 
   app.post("/api/outreach/send-approved", async (req, res) => {
-    const limit = Math.min(Math.max(Number(req.body?.limit ?? 25), 1), 100);
-    try { const results = await sendApprovedQueue(prisma, limit); res.json({ processed: results.length, sent: results.filter((r) => r.success).length, failed: results.filter((r) => !r.success).length, results }); }
+    const requested = Number(req.body?.limit ?? SAFETY_LIMITS.automationSendMax);
+    if (Number.isFinite(requested) && requested > SAFETY_LIMITS.automationSendMax) { res.status(400).json({ error: `Bulk sending is capped at ${SAFETY_LIMITS.automationSendMax} messages per request` }); return; }
+    const limit = capRequestedLimit(requested, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
+    try { const results = await sendApprovedQueue(prisma, limit); res.json({ processed: results.length, cap: SAFETY_LIMITS.automationSendMax, sent: results.filter((r) => r.success).length, failed: results.filter((r) => !r.success).length, results }); }
     catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 }
