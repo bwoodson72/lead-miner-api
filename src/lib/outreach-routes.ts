@@ -4,10 +4,12 @@ import { ensureInitialOutreachDraft } from "./research-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import { sendApprovedMessage, sendApprovedQueue } from "./outreach-sending.js";
 import { registerFollowupReplyRoutes } from "./followup-reply-routes.js";
+import { registerAutomationRoutes } from "./automation-routes.js";
 
 export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   registerSettingsRoutes(app, prisma);
   registerFollowupReplyRoutes(app, prisma);
+  registerAutomationRoutes(app, prisma);
 
   app.get("/api/outreach/review", async (_req, res) => {
     try {
