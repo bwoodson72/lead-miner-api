@@ -10,7 +10,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v2";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v3";
 
 function schema() {
   return {
@@ -44,6 +44,8 @@ function sanitizeProspectFacingEvidence(value: string | null): string | null {
     .trim();
 }
 
+const HARD_OUTREACH_RULES = "Use only supplied evidence. Never invent metrics, traffic loss, revenue loss, ad spend, customer behavior, or business facts. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, or benchmark names. Do not use placeholders. If a technical finding matters, express it in ordinary business language without overstating the consequence. Return only the required structured draft.";
+
 export async function generateOutreachDraft(input: {
   businessName: string | null;
   domain: string;
@@ -52,7 +54,7 @@ export async function generateOutreachDraft(input: {
   researchSummary: string | null;
   qualificationReason: string | null;
   problems: Array<{ title: string; evidence: string; businessConsequence: string; confidence: number; outreachValue: string }>;
-}, model: string, minProblemConfidence: number): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; outputTokens?: number }> {
+}, model: string, minProblemConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; outputTokens?: number }> {
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const packet = {
@@ -72,19 +74,14 @@ export async function generateOutreachDraft(input: {
         businessConsequence: sanitizeProspectFacingEvidence(p.businessConsequence) ?? p.businessConsequence,
       })),
   };
+  const systemInstructions = `${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_OUTREACH_RULES}`;
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
       input: [
-        {
-          role: "system",
-          content: [{
-            type: "input_text",
-            text: "Write a concise personalized cold outreach email for a web-development prospect. Use only supplied evidence. Focus on one concrete business-impact problem, not a technical audit dump. NEVER mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, or technical benchmark names in the prospect-facing email. Translate technical findings into plain business language such as slow loading, mobile friction, confusing calls to action, weak presentation, or visitors leaving before they can act, but do not claim a consequence that is not supported by the supplied evidence. Do not invent metrics, traffic loss, revenue loss, ad spend, or facts. Avoid generic compliments and fake familiarity. Keep the email plainspoken and short, with one low-friction CTA to discuss whether fixing the issue is worthwhile. Do not use placeholders."
-          }],
-        },
+        { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
         { role: "user", content: [{ type: "input_text", text: `Create the first outreach email from this qualified Lead Miner packet:\n${JSON.stringify(packet)}` }] },
       ],
       text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
