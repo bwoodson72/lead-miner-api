@@ -11,7 +11,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v3";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v4";
 
 function schema() {
   return {
@@ -45,7 +45,7 @@ function sanitizeProspectFacingEvidence(value: string | null): string | null {
     .trim();
 }
 
-const HARD_OUTREACH_RULES = "Use only supplied evidence. Never invent metrics, traffic loss, revenue loss, ad spend, customer behavior, or business facts. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, or benchmark names. Do not use placeholders. If a technical finding matters, express it in ordinary business language without overstating the consequence. Return only the required structured draft.";
+const HARD_OUTREACH_RULES = "Use only the supplied vetted problem evidence. Never invent metrics, traffic loss, revenue loss, ad spend, customer behavior, or business facts. Never infer a new problem from the business name, domain, keyword, or general industry knowledge. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, or benchmark names. Do not use placeholders. If a technical finding matters, express it in ordinary business language without overstating the consequence. Return only the required structured draft.";
 
 export async function generateOutreachDraft(input: {
   businessName: string | null;
@@ -58,23 +58,29 @@ export async function generateOutreachDraft(input: {
 }, model: string, minProblemConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; outputTokens?: number }> {
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
+
+  const vettedProblems = input.problems
+    .filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low")
+    .slice(0, 4)
+    .map((p) => ({
+      ...p,
+      title: sanitizeProspectFacingEvidence(p.title) ?? p.title,
+      evidence: sanitizeProspectFacingEvidence(p.evidence) ?? p.evidence,
+      businessConsequence: sanitizeProspectFacingEvidence(p.businessConsequence) ?? p.businessConsequence,
+    }));
+
+  if (!vettedProblems.length) {
+    throw new Error("No evidence-backed outreach problem meets the configured safety threshold");
+  }
+
   const packet = {
     businessName: input.businessName,
     domain: input.domain,
     keyword: input.keyword,
     primaryOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle),
-    researchSummary: sanitizeProspectFacingEvidence(input.researchSummary),
-    qualificationReason: sanitizeProspectFacingEvidence(input.qualificationReason),
-    problems: input.problems
-      .filter((p) => p.confidence >= minProblemConfidence && p.outreachValue !== "low")
-      .slice(0, 4)
-      .map((p) => ({
-        ...p,
-        title: sanitizeProspectFacingEvidence(p.title) ?? p.title,
-        evidence: sanitizeProspectFacingEvidence(p.evidence) ?? p.evidence,
-        businessConsequence: sanitizeProspectFacingEvidence(p.businessConsequence) ?? p.businessConsequence,
-      })),
+    problems: vettedProblems,
   };
+
   const systemInstructions = `${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_OUTREACH_RULES}`;
   const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
     method: "POST",
