@@ -1,4 +1,5 @@
 import { getEnv } from "./env.js";
+import { fetchWithProviderBackoff } from "./provider-retry.js";
 
 function b64url(value: string | Buffer) {
   return Buffer.from(value).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -14,7 +15,7 @@ async function accessToken() {
   const env = getEnv();
   if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !env.GMAIL_REFRESH_TOKEN) throw new Error("Gmail provider requires GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REFRESH_TOKEN");
   const body = new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: env.GMAIL_REFRESH_TOKEN, grant_type: "refresh_token" });
-  const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  const response = await fetchWithProviderBackoff("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }, "Gmail OAuth");
   if (!response.ok) throw new Error(`Gmail OAuth failed (${response.status}): ${await response.text()}`);
   const data = await response.json() as { access_token?: string };
   if (!data.access_token) throw new Error("Gmail OAuth returned no access token");
@@ -34,7 +35,7 @@ export type GmailMessage = { id: string; threadId: string; from: string | null; 
 
 async function gmailFetch(path: string, init?: RequestInit) {
   const token = await accessToken();
-  const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } });
+  const response = await fetchWithProviderBackoff(`https://gmail.googleapis.com/gmail/v1/users/me${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } }, "Gmail API");
   if (!response.ok) throw new Error(`Gmail API failed (${response.status}): ${await response.text()}`);
   return response.json() as Promise<any>;
 }
