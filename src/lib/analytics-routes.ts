@@ -77,8 +77,11 @@ export function registerAnalyticsRoutes(app: Express, prisma: PrismaClient) {
         followupMap.set(message.sequenceNumber, row);
       }
       for (const lead of leads) {
-        if (!lead.lastReplyAt) continue;
-        const beforeReply = lead.outreachMessages.filter((m) => m.sentAt && m.sentAt <= lead.lastReplyAt).sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0));
+        const lastReplyAt = lead.lastReplyAt;
+        if (!lastReplyAt) continue;
+        const beforeReply = lead.outreachMessages
+          .filter((m) => m.sentAt && m.sentAt <= lastReplyAt)
+          .sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0));
         const lastTouch = beforeReply[0];
         if (lastTouch) {
           const row = followupMap.get(lastTouch.sequenceNumber) ?? { sent: 0, leadsRepliedAfterTouch: 0 };
