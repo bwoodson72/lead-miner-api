@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { PrismaClient } from "../generated/prisma/client.js";
 
 export const ApprovalModeSchema = z.enum(["manual", "shadow", "auto_safe"]);
+export const EmailProviderSchema = z.enum(["resend", "gmail"]);
 
 export const AppSettingsInputSchema = z.object({
   autoResearch: z.boolean(),
@@ -9,8 +10,10 @@ export const AppSettingsInputSchema = z.object({
   approvalMode: ApprovalModeSchema,
   researchModel: z.string().min(1).max(100),
   outreachModel: z.string().min(1).max(100),
-  researchInstructions: z.string().min(20).max(12000),
-  outreachInstructions: z.string().min(20).max(12000),
+  researchInstructions: z.string().min(20).max(20000),
+  outreachInstructions: z.string().min(20).max(20000),
+  followUpInstructions: z.string().min(20).max(20000),
+  replyInstructions: z.string().min(20).max(20000),
   researchBatchSize: z.number().int().min(1).max(100),
   minAutoApprovePriority: z.number().int().min(0).max(100),
   minAutoApproveConfidence: z.number().min(0).max(1),
@@ -21,6 +24,7 @@ export const AppSettingsInputSchema = z.object({
   followUpDelaysDays: z.array(z.number().int().min(1).max(90)).min(1).max(10),
   senderName: z.string().min(1).max(100),
   senderEmail: z.string().email().max(254),
+  emailProvider: EmailProviderSchema,
 });
 
 export type AppSettingsInput = z.infer<typeof AppSettingsInputSchema>;
