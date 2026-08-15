@@ -15,13 +15,13 @@ import { getAppSettings } from "./settings.js";
 type Diagnostics = {
   keywordsParsed: number; adsFound: number; paidAdsFound: number; organicBusinessesFound: number; uniqueDomains: number;
   paidDomainsQueued: number; organicDomainsQueued: number; franchisesFiltered: number; pageSpeedResults: number; pageSpeedFailures: number;
-  slowSites: number; leadsEnriched: number; enrichmentFailures: number; emailsFound: number; phonesFound: number;
+  slowSites: number; leadsEnriched: number; enrichmentFailures: number; emailsFound: number; phonesFound: number; skippedNoEmail: number;
   dbCreated: number; dbUpdated: number; dbFailed: number; aiResearched: number; aiResearchFailed: number; draftsGenerated: number;
   emailSent: boolean; messages: string[];
 };
 
 export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (stage: string, detail: string) => void): Promise<{ leads: LeadRecord[]; keywords: string[]; diagnostics: Diagnostics }> {
-  const diagnostics: Diagnostics = { keywordsParsed: 0, adsFound: 0, paidAdsFound: 0, organicBusinessesFound: 0, uniqueDomains: 0, paidDomainsQueued: 0, organicDomainsQueued: 0, franchisesFiltered: 0, pageSpeedResults: 0, pageSpeedFailures: 0, slowSites: 0, leadsEnriched: 0, enrichmentFailures: 0, emailsFound: 0, phonesFound: 0, dbCreated: 0, dbUpdated: 0, dbFailed: 0, aiResearched: 0, aiResearchFailed: 0, draftsGenerated: 0, emailSent: false, messages: [] };
+  const diagnostics: Diagnostics = { keywordsParsed: 0, adsFound: 0, paidAdsFound: 0, organicBusinessesFound: 0, uniqueDomains: 0, paidDomainsQueued: 0, organicDomainsQueued: 0, franchisesFiltered: 0, pageSpeedResults: 0, pageSpeedFailures: 0, slowSites: 0, leadsEnriched: 0, enrichmentFailures: 0, emailsFound: 0, phonesFound: 0, skippedNoEmail: 0, dbCreated: 0, dbUpdated: 0, dbFailed: 0, aiResearched: 0, aiResearchFailed: 0, draftsGenerated: 0, emailSent: false, messages: [] };
   const keywords = input.keywords.split("\n").map((k) => k.trim()).filter(Boolean);
   diagnostics.keywordsParsed = keywords.length;
   const thresholds: Thresholds = { performanceScore: input.performanceScore, lcp: input.lcp, cls: input.cls, tbt: input.tbt };
@@ -78,9 +78,13 @@ export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (s
   const settings = await getAppSettings(prisma);
   if (settings.autoResearch) {
     const newIds = dbResults.filter((r) => r.action === "created" && r.id).map((r) => r.id!);
-    for (let i = 0; i < newIds.length; i++) {
-      const id = newIds[i]!;
-      onProgress?.("researching", `AI researching ${i + 1} of ${newIds.length} new leads...`);
+    const researchable = newIds.length ? await prisma.lead.findMany({ where: { id: { in: newIds }, email: { not: null } }, select: { id: true } }) : [];
+    const researchableIds = new Set(researchable.map((lead) => lead.id));
+    diagnostics.skippedNoEmail += newIds.filter((id) => !researchableIds.has(id)).length;
+    if (diagnostics.skippedNoEmail) diagnostics.messages.push(`Skipped AI research for ${diagnostics.skippedNoEmail} new lead(s) with no email`);
+    for (let i = 0; i < researchable.length; i++) {
+      const id = researchable[i]!.id;
+      onProgress?.("researching", `AI researching ${i + 1} of ${researchable.length} contactable new leads...`);
       try { const processed = await processLeadResearch(prisma, id); diagnostics.aiResearched++; if (processed.draft) diagnostics.draftsGenerated++; }
       catch (error) { diagnostics.aiResearchFailed++; diagnostics.messages.push(`AI research failed for lead ${id}: ${error instanceof Error ? error.message : String(error)}`); }
     }
@@ -89,6 +93,6 @@ export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (s
   const emailResult = await sendReport(leads, keywords, input.email);
   diagnostics.emailSent = emailResult.success;
   if (!emailResult.success) diagnostics.messages.push(`Email failed: ${emailResult.error ?? "unknown error"}`);
-  onProgress?.("complete", `Done — ${leads.length} leads found; ${diagnostics.aiResearched} AI researched; ${diagnostics.draftsGenerated} drafts generated`);
+  onProgress?.("complete", `Done — ${leads.length} leads found; ${diagnostics.skippedNoEmail} skipped for no email; ${diagnostics.aiResearched} AI researched; ${diagnostics.draftsGenerated} drafts generated`);
   return { leads, keywords, diagnostics };
 }
