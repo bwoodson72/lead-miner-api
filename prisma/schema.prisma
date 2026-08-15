@@ -119,6 +119,9 @@ model OutreachMessage {
   bodyText String @map("body_text")
   angle String?
   status String @default("draft")
+  idempotencyKey String? @unique @map("idempotency_key")
+  sendAttemptedAt DateTime? @map("send_attempted_at")
+  sendError String? @map("send_error")
   providerMessageId String? @unique @map("provider_message_id")
   providerThreadId String? @map("provider_thread_id")
   generatedAt DateTime @default(now()) @map("generated_at")
@@ -127,7 +130,7 @@ model OutreachMessage {
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, sentAt])
   @@index([providerThreadId])
-  @@index([status])
+  @@index([status, sendAttemptedAt])
   @@map("outreach_messages")
 }
 
@@ -162,6 +165,16 @@ model AIJob {
   @@index([leadId, createdAt])
   @@index([status])
   @@map("ai_jobs")
+}
+
+model AutomationLock {
+  name String @id
+  token String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([expiresAt])
+  @@map("automation_locks")
 }
 
 model AppSettings {
