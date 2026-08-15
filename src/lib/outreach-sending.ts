@@ -142,6 +142,7 @@ export async function reconcileStaleSends(prisma: PrismaClient, limit = 10) {
     const lease = await acquireAutomationLease(prisma, "outreach-send", 60_000);
     if (!lease) { results.push({ messageId: message.id, success: false, error: "Send lock busy" }); break; }
     try {
+      await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendAttemptedAt: new Date() } });
       await sendClaimedMessage(prisma, message.id);
       results.push({ messageId: message.id, success: true });
     } catch (error) {
