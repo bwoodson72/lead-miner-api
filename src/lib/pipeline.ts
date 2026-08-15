@@ -91,7 +91,7 @@ export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (s
 
   const env = getEnv();
   if (env.AUTO_RESEARCH) {
-    const newIds = dbResults.filter((r) => r.action === "created" && r.id).map((r) => r.id!) .slice(0, env.AI_RESEARCH_BATCH_SIZE);
+    const newIds = dbResults.filter((r) => r.action === "created" && r.id).map((r) => r.id!);
     for (let i = 0; i < newIds.length; i++) {
       const id = newIds[i]!;
       onProgress?.("researching", `AI researching ${i + 1} of ${newIds.length} new leads...`);
