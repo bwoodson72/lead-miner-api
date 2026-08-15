@@ -6,6 +6,7 @@ import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailThread } from "./gmail.js";
 import { sendApprovedMessage } from "./outreach-sending.js";
 import { estimateAiCost } from "./ai-cost.js";
+import { applyReplyAutomationStop, leadStatusForReply } from "./reply-state.js";
 
 async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -73,12 +74,12 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
   try {
     const classified = await classifyReply({ instructions: settings.replyInstructions, replyText: latest.text, threadContext: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) }, settings.outreachModel);
     const c = classified.result.classification;
-    const status = c === "interested" || c === "booking_intent" ? "interested" : c === "bounce" ? "bounced" : c === "unsubscribe" ? "unsubscribed" : "replied";
+    const status = leadStatusForReply(c);
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({ where: { id: leadId }, data: { status, replyStatus: c, replySummary: classified.result.summary, lastReplyAt: latest.internalDate, replyHandledAt: null, followUpDate: null } });
       await tx.emailThread.upsert({ where: { providerThreadId: threadId }, update: { status: c === "bounce" || c === "unsubscribe" ? "closed" : "replied", lastInboundAt: latest.internalDate, recipientEmail: lead.email }, create: { leadId, provider: "gmail", providerThreadId: threadId, recipientEmail: lead.email, status: c === "bounce" || c === "unsubscribe" ? "closed" : "replied", lastInboundAt: latest.internalDate } });
       await tx.activity.create({ data: { leadId, type: "reply_received", summary: `${c}: ${classified.result.summary}`, metadata: { gmailMessageId: latest.id, providerThreadId: threadId, recommendedAction: classified.result.recommendedAction, confidence: classified.result.confidence } } });
-      if ((c === "unsubscribe" || c === "bounce") && lead.email) await tx.suppression.upsert({ where: { type_value: { type: "email", value: lead.email.toLowerCase() } }, update: { reason: c }, create: { leadId, type: "email", value: lead.email.toLowerCase(), reason: c } });
+      await applyReplyAutomationStop(tx, { leadId, classification: c, email: lead.email });
       await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: classified.model, inputTokens: classified.inputTokens, outputTokens: classified.outputTokens, estimatedCost: estimateAiCost(classified.model, classified.inputTokens, classified.outputTokens), completedAt: new Date() } });
     });
     return classified.result;
