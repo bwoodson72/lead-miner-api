@@ -8,6 +8,7 @@ import { DEFAULT_KEYWORDS } from "./config/keywords.js";
 import { DEFAULT_THRESHOLDS } from "./config/thresholds.js";
 import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
 import { registerResearchRoutes } from "./lib/research-routes.js";
+import { registerOutreachRoutes } from "./lib/outreach-routes.js";
 import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -133,6 +134,7 @@ app.post("/api/leads/batch-reject", async (req, res) => {
 });
 
 registerResearchRoutes(app, prisma);
+registerOutreachRoutes(app, prisma);
 setInterval(cleanOldJobs, 10 * 60 * 1000);
 const port = process.env["PORT"] ?? 3001;
 app.listen(port, () => console.log(`[Server] Listening on port ${port}`));
