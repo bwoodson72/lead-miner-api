@@ -46,10 +46,27 @@ function normalize(message: any): GmailMessage {
 export async function getGmailMessage(id: string): Promise<GmailMessage> { return normalize(await gmailFetch(`/messages/${encodeURIComponent(id)}?format=full`)); }
 export async function getGmailThread(threadId: string): Promise<GmailMessage[]> { const thread = await gmailFetch(`/threads/${encodeURIComponent(threadId)}?format=full`); return (thread.messages ?? []).map(normalize); }
 
-export async function sendGmailMessage(input: { fromName: string; fromEmail: string; to: string; subject: string; bodyText: string; threadId?: string | null; inReplyToMessageId?: string | null }) {
-  const headers = [`From: ${input.fromName} <${input.fromEmail}>`, `To: ${input.to}`, `Subject: ${input.subject}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit"];
+export async function findGmailMessageByRfcMessageId(rfcMessageId: string): Promise<GmailMessage | null> {
+  const query = encodeURIComponent(`rfc822msgid:${rfcMessageId}`);
+  const result = await gmailFetch(`/messages?q=${query}&maxResults=1`);
+  const id = result.messages?.[0]?.id as string | undefined;
+  return id ? getGmailMessage(id) : null;
+}
+
+export async function sendGmailMessage(input: { fromName: string; fromEmail: string; to: string; subject: string; bodyText: string; messageId: string; threadId?: string | null; inReplyToMessageId?: string | null }) {
+  const existing = await findGmailMessageByRfcMessageId(input.messageId);
+  if (existing) return { id: existing.id, threadId: existing.threadId, reconciled: true };
+
+  const headers = [`From: ${input.fromName} <${input.fromEmail}>`, `To: ${input.to}`, `Subject: ${input.subject}`, `Message-ID: ${input.messageId}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit"];
   if (input.inReplyToMessageId) { headers.push(`In-Reply-To: ${input.inReplyToMessageId}`); headers.push(`References: ${input.inReplyToMessageId}`); }
   const raw = b64url(`${headers.join("\r\n")}\r\n\r\n${input.bodyText}`);
-  const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) });
-  return { id: result.id as string, threadId: result.threadId as string };
+
+  try {
+    const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) });
+    return { id: result.id as string, threadId: result.threadId as string, reconciled: false };
+  } catch (error) {
+    const reconciled = await findGmailMessageByRfcMessageId(input.messageId).catch(() => null);
+    if (reconciled) return { id: reconciled.id, threadId: reconciled.threadId, reconciled: true };
+    throw error;
+  }
 }
