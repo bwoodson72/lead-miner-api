@@ -7,11 +7,24 @@ import { acquireAutomationLease, releaseAutomationLease } from "./automation-loc
 import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
 import { SAFETY_LIMITS } from "./safety-limits.js";
+import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/automation/tick", async (req, res) => {
-    const secret = process.env["CRON_SECRET"];
-    if (secret && req.headers.authorization !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
+    const auth = authorizeCronRequest(req.headers.authorization);
+    if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
+
+    const policy = getAutomationRuntimePolicy();
+    if (!policy.automationEnabled) {
+      res.json({
+        success: true,
+        skipped: true,
+        automationEnabled: false,
+        sendAutomationEnabled: policy.sendAutomationEnabled,
+        reason: "Automation is disabled",
+      });
+      return;
+    }
 
     const lease = await acquireAutomationLease(prisma, "automation-tick", 30 * 60_000);
     if (!lease) { res.status(409).json({ error: "Automation tick already running" }); return; }
@@ -22,11 +35,25 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
       const emailEnrichment = await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax);
       const researchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax);
       const research = settings.autoResearch ? await processResearchReadyLeads(prisma, researchLimit) : [];
-      const reconciled = await reconcileStaleSends(prisma, SAFETY_LIMITS.automationStaleSendMax);
-      const followups = await processDueFollowUps(prisma, SAFETY_LIMITS.automationFollowupMax);
-      const sends = await sendApprovedQueue(prisma, SAFETY_LIMITS.automationSendMax);
+
+      // These three paths can transmit email. Keep them behind a second,
+      // independent production switch so research automation can be exercised
+      // without accidentally sending anything.
+      const reconciled = policy.sendAutomationEnabled
+        ? await reconcileStaleSends(prisma, SAFETY_LIMITS.automationStaleSendMax)
+        : [];
+      const followups = policy.sendAutomationEnabled
+        ? await processDueFollowUps(prisma, SAFETY_LIMITS.automationFollowupMax)
+        : [];
+      const sends = policy.sendAutomationEnabled
+        ? await sendApprovedQueue(prisma, SAFETY_LIMITS.automationSendMax)
+        : [];
+
       res.json({
         success: true,
+        skipped: false,
+        automationEnabled: true,
+        sendAutomationEnabled: policy.sendAutomationEnabled,
         limits: {
           replySync: SAFETY_LIMITS.automationReplySyncMax,
           emailEnrichment: SAFETY_LIMITS.automationEnrichmentMax,

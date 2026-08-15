@@ -10,6 +10,8 @@ import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
 import { registerResearchRoutes } from "./lib/research-routes.js";
 import { registerOutreachRoutes } from "./lib/outreach-routes.js";
 import { registerAnalyticsRoutes } from "./lib/analytics-routes.js";
+import { registerAutomationRoutes } from "./lib/automation-routes.js";
+import { authorizeCronRequest } from "./lib/automation-policy.js";
 import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -38,8 +40,10 @@ app.get("/api/jobs/:id", (req, res) => {
 });
 
 app.get("/api/cron", async (req, res) => {
+  const auth = authorizeCronRequest(req.headers.authorization);
+  if (!auth.ok) { res.status(auth.status).json({ success: false, error: auth.error }); return; }
+
   const env = getEnv();
-  if (env.CRON_SECRET && req.headers["authorization"] !== `Bearer ${env.CRON_SECRET}`) { res.status(401).json({ success: false, error: "Unauthorized" }); return; }
   try {
     const input = KeywordInputSchema.parse({ keywords: DEFAULT_KEYWORDS.join("\n"), ...DEFAULT_THRESHOLDS, email: env.REPORT_EMAIL });
     const { leads, keywords, diagnostics } = await runLeadSearchPipeline(input);
@@ -161,6 +165,7 @@ app.post("/api/leads/batch-reject", async (req, res) => {
 registerResearchRoutes(app, prisma);
 registerOutreachRoutes(app, prisma);
 registerAnalyticsRoutes(app, prisma);
+registerAutomationRoutes(app, prisma);
 setInterval(cleanOldJobs, 10 * 60 * 1000);
 const port = process.env["PORT"] ?? 3001;
 app.listen(port, () => console.log(`[Server] Listening on port ${port}`));

@@ -1,0 +1,55 @@
+name: Automation Tick
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: lead-miner-automation-tick
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate scheduler configuration
+        env:
+          API_URL: ${{ secrets.LEAD_MINER_API_URL }}
+          CRON_SECRET: ${{ secrets.LEAD_MINER_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$API_URL" || { echo "Missing LEAD_MINER_API_URL repository secret"; exit 1; }
+          test -n "$CRON_SECRET" || { echo "Missing LEAD_MINER_CRON_SECRET repository secret"; exit 1; }
+
+      - name: Run automation tick
+        env:
+          API_URL: ${{ secrets.LEAD_MINER_API_URL }}
+          CRON_SECRET: ${{ secrets.LEAD_MINER_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          body_file="$(mktemp)"
+          status="$(curl --silent --show-error \
+            --output "$body_file" \
+            --write-out "%{http_code}" \
+            --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            --header "Content-Type: application/json" \
+            "${API_URL%/}/api/automation/tick")"
+
+          cat "$body_file"
+          echo
+
+          if [ "$status" = "409" ]; then
+            echo "Automation tick is already running; leaving the active worker in control."
+            exit 0
+          fi
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Automation tick failed with HTTP $status"
+            exit 1
+          fi
