@@ -4,6 +4,8 @@ import { getEnv } from "./env.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
+import { retryTransient, looksTransientProviderError } from "./provider-retry.js";
+import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import {
   getSendIneligibilityReason,
   isWithinSendWindow,
@@ -44,13 +46,16 @@ async function providerSend(prisma: PrismaClient, message: any, settings: any, k
   const env = getEnv();
   if (!env.RESEND_API_KEY) throw new Error("RESEND_API_KEY is not configured");
   const resend = new Resend(env.RESEND_API_KEY);
-  const result = await resend.emails.send(
-    { from: `${settings.senderName} <${settings.senderEmail}>`, to: message.lead.email, subject: message.subject, text: message.bodyText },
-    { idempotencyKey: key },
-  );
-  if (result.error) throw new Error(result.error.message);
-  if (!result.data?.id) throw new Error("Email provider returned no message id");
-  return { providerMessageId: result.data.id, providerThreadId: null, reconciled: false };
+  const result = await retryTransient(async () => {
+    const attempt = await resend.emails.send(
+      { from: `${settings.senderName} <${settings.senderEmail}>`, to: message.lead.email, subject: message.subject, text: message.bodyText },
+      { idempotencyKey: key },
+    );
+    if (attempt.error) throw new Error(attempt.error.message);
+    if (!attempt.data?.id) throw new Error("Email provider returned no message id");
+    return attempt;
+  }, "Resend", looksTransientProviderError);
+  return { providerMessageId: result.data!.id, providerThreadId: null, reconciled: false };
 }
 
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
@@ -65,10 +70,6 @@ export type ClaimApprovedResult =
   | { state: "claimed"; idempotencyKey: string }
   | { state: "already_sent"; message: any };
 
-/**
- * Atomically transitions one approved message into the sending state.
- * The status predicate is the concurrency guard: only one caller can claim it.
- */
 export async function claimApprovedMessage(
   prisma: PrismaClient,
   messageId: number,
@@ -150,8 +151,9 @@ export async function reconcileStaleSends(
   limit = 10,
   resendClaimed: (prisma: PrismaClient, messageId: number) => Promise<unknown> = sendClaimedMessage,
 ) {
+  const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationStaleSendMax, SAFETY_LIMITS.automationStaleSendMax);
   const cutoff = new Date(Date.now() - STALE_SEND_MS);
-  const messages = await prisma.outreachMessage.findMany({ where: { status: "sending", sendAttemptedAt: { lte: cutoff } }, orderBy: { sendAttemptedAt: "asc" }, take: limit, select: { id: true } });
+  const messages = await prisma.outreachMessage.findMany({ where: { status: "sending", sendAttemptedAt: { lte: cutoff } }, orderBy: { sendAttemptedAt: "asc" }, take: safeLimit, select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
 
   for (const message of messages) {
@@ -171,7 +173,8 @@ export async function reconcileStaleSends(
 }
 
 export async function sendApprovedQueue(prisma: PrismaClient, limit = 25) {
-  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved" }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: limit, select: { id: true } });
+  const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
+  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved" }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
   for (const message of messages) {
     try { await sendApprovedMessage(prisma, message.id); results.push({ messageId: message.id, success: true }); }
