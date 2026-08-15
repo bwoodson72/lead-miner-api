@@ -22,13 +22,20 @@ export type UpsertResult = {
   error?: string;
 };
 
+function initialEmailEnrichmentState(lead: LeadRecord) {
+  if (lead.email) return { emailEnrichmentStatus: "found", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_discovered" };
+  if (lead.enrichmentStatus === "failed") return { emailEnrichmentStatus: "retry", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: new Date(Date.now() + 86_400_000), emailEnrichmentReason: "site_fetch_failed" };
+  return { emailEnrichmentStatus: "exhausted", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: null, emailEnrichmentReason: "search_exhausted" };
+}
+
 export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
   try {
     const normalizedDomain = normalizeDomainValue(lead.domain);
     const existing = await prisma.lead.findFirst({
       where: { OR: [{ domain: lead.domain }, { normalizedDomain }] },
-      select: { id: true },
+      select: { id: true, email: true },
     });
+    const emailState = initialEmailEnrichmentState(lead);
 
     const result = await prisma.$transaction(async (tx) => {
       const data = {
@@ -47,6 +54,7 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         contactPageUrl: lead.contactPageUrl ?? undefined,
         enrichmentStatus: lead.enrichmentStatus ?? undefined,
         enrichmentNotes: lead.enrichmentNotes ?? undefined,
+        ...(lead.email || !existing?.email ? emailState : {}),
         isAgencyManaged: lead.isAgencyManaged ?? undefined,
         agencyName: lead.agencyName ?? undefined,
         isNationalChain: lead.isNationalChain ?? undefined,
@@ -72,6 +80,7 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
             contactPageUrl: lead.contactPageUrl ?? null,
             enrichmentStatus: lead.enrichmentStatus ?? null,
             enrichmentNotes: lead.enrichmentNotes ?? null,
+            ...emailState,
             isAgencyManaged: lead.isAgencyManaged ?? false,
             agencyName: lead.agencyName ?? null,
             isNationalChain: lead.isNationalChain ?? false,
@@ -82,8 +91,8 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
       if (lead.email) {
         await tx.contact.upsert({
           where: { leadId_type_value: { leadId: saved.id, type: "email", value: lead.email.toLowerCase() } },
-          update: { isPrimary: true, source: "enrichment" },
-          create: { leadId: saved.id, type: "email", value: lead.email.toLowerCase(), isPrimary: true, source: "enrichment" },
+          update: { isPrimary: true, source: "enrichment", verificationStatus: "discovered" },
+          create: { leadId: saved.id, type: "email", value: lead.email.toLowerCase(), isPrimary: true, source: "enrichment", verificationStatus: "discovered" },
         });
       }
       if (lead.phone) {
