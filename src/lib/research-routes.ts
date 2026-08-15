@@ -5,6 +5,7 @@ import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { registerEnrichmentRoutes } from "./enrichment-routes.js";
+import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -34,32 +35,62 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
 }
 
 export async function processLeadResearch(prisma: PrismaClient, leadId: number) {
-  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-  if (!lead) throw new Error("Lead not found");
-  if (!lead.email) throw new Error("Lead has no email; contact enrichment must succeed before AI research");
-  const settings = await getAppSettings(prisma);
-  const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
+  const lease = await acquireAutomationLease(prisma, `lead-research-${leadId}`, 10 * 60_000);
+  if (!lease) throw new Error("Lead research is already running");
   try {
-    const { result, model, inputTokens, outputTokens } = await researchLead(lead, settings.researchModel, settings.researchInstructions);
-    const priorityScore = calculatePriority(result.scores);
-    const nextStatus = result.decision === "qualified" ? "qualified" : result.decision === "disqualified" ? "disqualified" : lead.status;
-    await prisma.$transaction(async (tx) => {
-      await tx.leadProblem.deleteMany({ where: { leadId } });
-      if (result.problems.length) await tx.leadProblem.createMany({ data: result.problems.map((p) => ({ leadId, category: p.category, title: p.title, evidence: p.evidence, businessConsequence: p.businessConsequence, recommendedImprovement: p.recommendedImprovement || null, confidence: p.confidence, outreachValue: p.outreachValue })) });
-      await tx.leadScore.create({ data: { leadId, ...result.scores, compositeScore: priorityScore, model, researchVersion: RESEARCH_VERSION } });
-      await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.qualificationReason, priorityScore, primaryOutreachAngle: result.primaryOutreachAngle, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date() } });
-      await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model } } });
-      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
-    });
-    let draft = null;
-    if (result.decision === "qualified") { try { draft = await ensureInitialOutreachDraft(prisma, leadId); } catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); } }
-    return { result, priorityScore, draft };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
-    await prisma.activity.create({ data: { leadId, type: "research_failed", summary: message } });
-    throw error;
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) throw new Error("Lead not found");
+    if (!lead.email) throw new Error("Lead has no email; contact enrichment must succeed before AI research");
+    const settings = await getAppSettings(prisma);
+    const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
+    try {
+      const { result, model, inputTokens, outputTokens } = await researchLead(lead, settings.researchModel, settings.researchInstructions);
+      const priorityScore = calculatePriority(result.scores);
+      const nextStatus = result.decision === "qualified" ? "qualified" : result.decision === "disqualified" ? "disqualified" : lead.status;
+      await prisma.$transaction(async (tx) => {
+        await tx.leadProblem.deleteMany({ where: { leadId } });
+        if (result.problems.length) await tx.leadProblem.createMany({ data: result.problems.map((p) => ({ leadId, category: p.category, title: p.title, evidence: p.evidence, businessConsequence: p.businessConsequence, recommendedImprovement: p.recommendedImprovement || null, confidence: p.confidence, outreachValue: p.outreachValue })) });
+        await tx.leadScore.create({ data: { leadId, ...result.scores, compositeScore: priorityScore, model, researchVersion: RESEARCH_VERSION } });
+        await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.qualificationReason, priorityScore, primaryOutreachAngle: result.primaryOutreachAngle, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date() } });
+        await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model } } });
+        await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
+      });
+      let draft = null;
+      if (result.decision === "qualified") { try { draft = await ensureInitialOutreachDraft(prisma, leadId); } catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); } }
+      return { result, priorityScore, draft };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
+      await prisma.activity.create({ data: { leadId, type: "research_failed", summary: message } });
+      throw error;
+    }
+  } finally {
+    await releaseAutomationLease(prisma, lease);
   }
+}
+
+export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10) {
+  const leads = await prisma.lead.findMany({
+    where: {
+      email: { not: null },
+      status: { in: ["new", "research_pending"] },
+      lastResearchedAt: null,
+      aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
+    },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number; draftId?: number; error?: string }> = [];
+  for (const lead of leads) {
+    try {
+      const processed = await processLeadResearch(prisma, lead.id);
+      results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore, draftId: processed.draft?.id });
+    } catch (error) {
+      results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return results;
 }
 
 export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
