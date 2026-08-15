@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
+import { fetchWithProviderBackoff } from "./provider-retry.js";
 
 const OutreachDraftSchema = z.object({
   subject: z.string().min(1).max(120),
@@ -75,7 +76,7 @@ export async function generateOutreachDraft(input: {
       })),
   };
   const systemInstructions = `${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_OUTREACH_RULES}`;
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -86,7 +87,7 @@ export async function generateOutreachDraft(input: {
       ],
       text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
     }),
-  });
+  }, "OpenAI outreach");
   if (!response.ok) throw new Error(`OpenAI outreach failed (${response.status}): ${await response.text()}`);
   const data = await response.json() as any;
   const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
