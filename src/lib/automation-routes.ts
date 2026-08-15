@@ -10,7 +10,7 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
     const secret = process.env["CRON_SECRET"];
     if (secret && req.headers.authorization !== `Bearer ${secret}`) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-    const lease = await acquireAutomationLease(prisma, "automation-tick", 10 * 60_000);
+    const lease = await acquireAutomationLease(prisma, "automation-tick", 30 * 60_000);
     if (!lease) { res.status(409).json({ error: "Automation tick already running" }); return; }
 
     try {
