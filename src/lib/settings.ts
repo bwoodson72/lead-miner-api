@@ -27,15 +27,13 @@ export const AppSettingsInputSchema = z.object({
   emailProvider: EmailProviderSchema,
 });
 
-export const AIInstructionsInputSchema = z.object({
-  researchInstructions: z.string().min(20).max(20000),
-  outreachInstructions: z.string().min(20).max(20000),
-  followUpInstructions: z.string().min(20).max(20000),
-  replyInstructions: z.string().min(20).max(20000),
-});
+export const AppSettingsPatchSchema = AppSettingsInputSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one setting is required" },
+);
 
 export type AppSettingsInput = z.infer<typeof AppSettingsInputSchema>;
-export type AIInstructionsInput = z.infer<typeof AIInstructionsInputSchema>;
+export type AppSettingsPatch = z.infer<typeof AppSettingsPatchSchema>;
 
 export async function getAppSettings(prisma: PrismaClient) {
   return prisma.appSettings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
@@ -46,8 +44,8 @@ export async function updateAppSettings(prisma: PrismaClient, input: unknown) {
   return prisma.appSettings.upsert({ where: { id: 1 }, update: parsed, create: { id: 1, ...parsed } });
 }
 
-export async function updateAIInstructions(prisma: PrismaClient, input: unknown) {
-  const parsed = AIInstructionsInputSchema.parse(input);
+export async function patchAppSettings(prisma: PrismaClient, input: unknown) {
+  const parsed = AppSettingsPatchSchema.parse(input);
   return prisma.appSettings.upsert({
     where: { id: 1 },
     update: parsed,
