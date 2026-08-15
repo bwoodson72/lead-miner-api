@@ -4,6 +4,7 @@ import { calculatePriority, researchLead, RESEARCH_VERSION } from "./ai-research
 import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js";
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
+import { registerEnrichmentRoutes } from "./enrichment-routes.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -62,6 +63,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
 }
 
 export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
+  registerEnrichmentRoutes(app, prisma);
   app.get("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
     const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } });
@@ -73,10 +75,11 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
     catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.post("/api/leads/bulk-research", async (req, res) => {
-    const requested = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => Number.isInteger(id)) : [];
+    const requested = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => Number.isInteger(id)) as number[] : [];
     const settings = await getAppSettings(prisma);
-    const where = requested.length ? { id: { in: requested }, email: { not: null as null | string } } : { status: { in: ["new", "research_pending"] }, email: { not: null as null | string } };
-    const leads = await prisma.lead.findMany({ where: where as any, orderBy: requested.length ? undefined : { createdAt: "asc" }, take: settings.researchBatchSize, select: { id: true } });
+    const leads = requested.length
+      ? await prisma.lead.findMany({ where: { id: { in: requested }, email: { not: null } }, take: settings.researchBatchSize, select: { id: true } })
+      : await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, email: { not: null } }, orderBy: { createdAt: "asc" }, take: settings.researchBatchSize, select: { id: true } });
     const results: Array<{ id:number; success:boolean; decision?:string; priorityScore?:number; error?:string }> = [];
     for (const lead of leads) { try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); } catch (error) { results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
     res.json({ processed: results.length, skippedNoEmail: requested.length ? requested.length - leads.length : undefined, results });
