@@ -59,14 +59,14 @@ app.get("/api/leads/export", async (req, res) => {
   if (hasPhone === "true") where.phone = { not: null };
   if (search) where.OR = [{ businessName: { contains: search, mode: "insensitive" } }, { domain: { contains: search, mode: "insensitive" } }];
   try {
-    const leads = await prisma.lead.findMany({ where, orderBy: [{ priorityScore: "desc" }, { lcp: "desc" }] });
+    const leads = await prisma.lead.findMany({ where, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }] });
     const rows = leads.map((lead) => ({ "Business Name": lead.businessName ?? "", Domain: lead.domain, Website: lead.landingPageUrl, Phone: lead.phone ?? "", Email: lead.email ?? "", Address: lead.address ?? "", Keyword: lead.keyword, "PageSpeed Score": lead.lighthouseScore, "LCP (ms)": lead.lcp, "AI Priority": lead.priorityScore ?? "", "AI Decision": lead.qualificationDecision ?? "", "Outreach Angle": lead.primaryOutreachAngle ?? "", Status: lead.status, "Outreach Count": lead.outreachCount, "Last Outreach": lead.lastOutreachDate?.toISOString() ?? "", "Follow Up Date": lead.followUpDate?.toISOString() ?? "", "Agency Managed": lead.isAgencyManaged ? "Yes" : "No", "National Chain": lead.isNationalChain ? "Yes" : "No" }));
     res.setHeader("Content-Type", "text/csv"); res.setHeader("Content-Disposition", 'attachment; filename="leads.csv"'); res.send(csvStringify(rows, { header: true }));
   } catch (err) { res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) }); }
 });
 
 app.get("/api/leads", async (req, res) => {
-  const { status, minLcp, isAgencyManaged, isNationalChain, hideRejected, followUpDue, qualificationDecision, minPriority, limit, offset } = req.query as Record<string, string | undefined>;
+  const { status, minLcp, isAgencyManaged, isNationalChain, hideRejected, followUpDue, qualificationDecision, minPriority, limit, offset, adSource, hasEmail, hasPhone, search } = req.query as Record<string, string | undefined>;
   const where: Record<string, any> = {};
   if (status) where.status = status;
   if (hideRejected === "true" && !status) where.status = { not: "rejected" };
@@ -75,10 +75,18 @@ app.get("/api/leads", async (req, res) => {
   if (minPriority) where.priorityScore = { gte: parseInt(minPriority, 10) };
   if (isAgencyManaged !== undefined) where.isAgencyManaged = isAgencyManaged === "true";
   if (isNationalChain !== undefined) where.isNationalChain = isNationalChain === "true";
+  if (adSource === "paid_ad" || adSource === "local_organic") where.adSource = adSource;
+  if (hasEmail === "true") where.email = { not: null };
+  if (hasPhone === "true") where.phone = { not: null };
+  if (search) where.OR = [{ businessName: { contains: search, mode: "insensitive" } }, { domain: { contains: search, mode: "insensitive" } }];
   if (followUpDue === "true") { where.followUpDate = { lte: new Date() }; where.status = "contacted"; }
   try {
-    const take = limit ? parseInt(limit, 10) : 50; const skip = offset ? parseInt(offset, 10) : 0;
-    const [leads, total] = await Promise.all([prisma.lead.findMany({ where, orderBy: [{ priorityScore: "desc" }, { lcp: "desc" }], take, skip }), prisma.lead.count({ where })]);
+    const take = limit ? parseInt(limit, 10) : undefined;
+    const skip = offset ? parseInt(offset, 10) : undefined;
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({ where, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take, skip }),
+      prisma.lead.count({ where }),
+    ]);
     res.json({ leads, total });
   } catch (err) { res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) }); }
 });
