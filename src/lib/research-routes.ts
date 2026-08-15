@@ -153,6 +153,14 @@ export async function processPreparedResearchBatch(prisma: PrismaClient, leadIds
   return results;
 }
 
+function statusForResearchError(message: string) {
+  if (/lead not found/i.test(message)) return 404;
+  if (/already running|concurrency limit/i.test(message)) return 409;
+  if (/no email|not research-ready|enrichment.*(?:exhausted|retry|found but)/i.test(message)) return 422;
+  if (/openai|provider|fetch failed|econn|etimedout|429|502|503|504/i.test(message)) return 502;
+  return 500;
+}
+
 export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   registerEnrichmentRoutes(app, prisma);
   app.get("/api/leads/:id/research", async (req, res) => {
@@ -162,10 +170,14 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   });
   app.post("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
+    let preparation: ResearchPreparationResult | null = null;
     try {
-      const preparation = await prepareLeadForResearch(prisma, id);
+      preparation = await prepareLeadForResearch(prisma, id);
       if (!preparation.ready) {
-        res.status(409).json({ error: preparation.reason ?? `Lead is not research-ready (${preparation.status})`, preparation });
+        const message = preparation.reason ?? `Lead is not research-ready (${preparation.status})`;
+        const status = preparation.status === "deferred" ? 409 : preparation.status === "missing" ? 404 : 422;
+        console.warn(`[Research] Lead ${id} blocked before AI — status=${preparation.status}, reason=${message}`);
+        res.status(status).json({ error: message, stage: "preparation", preparation });
         return;
       }
       await processLeadResearch(prisma, id);
@@ -173,7 +185,12 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
         preparation,
         lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } }),
       });
-    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = statusForResearchError(message);
+      console.error(`[Research] Lead ${id} failed — stage=${preparation?.ready ? "research" : "preparation"}, status=${status}, error=${message}`, error);
+      res.status(status).json({ error: message, stage: preparation?.ready ? "research" : "preparation", preparation });
+    }
   });
   app.post("/api/leads/bulk-research", async (req, res) => {
     const requested = Array.isArray(req.body?.ids)
