@@ -115,7 +115,9 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
     try {
       const settings = await getAppSettings(prisma);
       const replies = settings.emailProvider === "gmail" ? await syncReplies(prisma, SAFETY_LIMITS.automationReplySyncMax) : [];
-      const emailEnrichment = await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax);
+      const emailEnrichment = settings.autoResearch
+        ? await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax)
+        : [];
       const researchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax);
       const research = settings.autoResearch ? await processResearchReadyLeads(prisma, researchLimit) : [];
 
