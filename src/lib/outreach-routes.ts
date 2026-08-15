@@ -3,9 +3,11 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { ensureInitialOutreachDraft } from "./research-routes.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import { sendApprovedMessage, sendApprovedQueue } from "./outreach-sending.js";
+import { registerFollowupReplyRoutes } from "./followup-reply-routes.js";
 
 export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   registerSettingsRoutes(app, prisma);
+  registerFollowupReplyRoutes(app, prisma);
 
   app.get("/api/outreach/review", async (_req, res) => {
     try {
@@ -34,7 +36,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     if (typeof bodyText === "string" && bodyText.trim()) data.bodyText = bodyText.trim();
     if (status !== undefined) { if (!["draft", "approved", "rejected"].includes(String(status))) { res.status(400).json({ error: "Invalid status" }); return; } data.status = String(status); if (status === "approved") data.approvedAt = new Date(); if (status === "draft") data.approvedAt = null; }
     try {
-      const updated = await prisma.$transaction(async (tx) => { const message = await tx.outreachMessage.update({ where: { id }, data }); await tx.activity.create({ data: { leadId: message.leadId, type: status === "approved" ? "message_approved" : status === "rejected" ? "message_rejected" : "message_updated", summary: status === "approved" ? "Initial outreach approved" : status === "rejected" ? "Outreach draft rejected" : "Outreach draft edited" } }); return message; });
+      const updated = await prisma.$transaction(async (tx) => { const message = await tx.outreachMessage.update({ where: { id }, data }); await tx.activity.create({ data: { leadId: message.leadId, type: status === "approved" ? "message_approved" : status === "rejected" ? "message_rejected" : "message_updated", summary: status === "approved" ? "Outreach approved" : status === "rejected" ? "Outreach draft rejected" : "Outreach draft edited" } }); return message; });
       res.json(updated);
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
