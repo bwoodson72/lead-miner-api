@@ -13,6 +13,86 @@ import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   registerResearchMaintenanceRoutes(app, prisma);
 
+  app.get("/api/automation/status", async (req, res) => {
+    const auth = authorizeCronRequest(req.headers.authorization);
+    if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
+
+    try {
+      const policy = getAutomationRuntimePolicy();
+      const settings = await getAppSettings(prisma);
+      const now = new Date();
+      const [
+        pendingEnrichment,
+        researchReady,
+        approvedMessages,
+        sendingMessages,
+        followupsDue,
+        unhandledReplies,
+        staleResearchV3,
+      ] = await Promise.all([
+        prisma.lead.count({
+          where: {
+            email: null,
+            status: { in: ["new", "research_pending", "qualified"] },
+            OR: [
+              { emailEnrichmentStatus: "pending" },
+              { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } },
+            ],
+          },
+        }),
+        prisma.lead.count({
+          where: {
+            email: { not: null },
+            status: { in: ["new", "research_pending"] },
+            lastResearchedAt: null,
+            aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
+          },
+        }),
+        prisma.outreachMessage.count({ where: { status: "approved" } }),
+        prisma.outreachMessage.count({ where: { status: "sending" } }),
+        prisma.lead.count({ where: { status: "contacted", followUpDate: { lte: now }, replyStatus: null } }),
+        prisma.lead.count({ where: { replyStatus: { not: null }, replyHandledAt: null } }),
+        prisma.lead.count({ where: { researchVersion: "lead-research-v3", email: { not: null } } }),
+      ]);
+
+      res.json({
+        automationEnabled: policy.automationEnabled,
+        sendAutomationEnabled: policy.sendAutomationEnabled,
+        settings: {
+          autoResearch: settings.autoResearch,
+          autoDraftOutreach: settings.autoDraftOutreach,
+          approvalMode: settings.approvalMode,
+          emailProvider: settings.emailProvider,
+          dailySendLimit: settings.dailySendLimit,
+          sendWindowStart: settings.sendWindowStart,
+          sendWindowEnd: settings.sendWindowEnd,
+          researchBatchSize: settings.researchBatchSize,
+        },
+        queue: {
+          pendingEnrichment,
+          researchReady,
+          approvedMessages,
+          sendingMessages,
+          followupsDue,
+          unhandledReplies,
+          staleResearchV3,
+        },
+        hardLimits: {
+          replySync: SAFETY_LIMITS.automationReplySyncMax,
+          emailEnrichment: SAFETY_LIMITS.automationEnrichmentMax,
+          research: SAFETY_LIMITS.automationResearchMax,
+          staleSendReconciliation: SAFETY_LIMITS.automationStaleSendMax,
+          followups: SAFETY_LIMITS.automationFollowupMax,
+          sends: SAFETY_LIMITS.automationSendMax,
+          aiConcurrency: SAFETY_LIMITS.aiResearchConcurrency,
+          enrichmentConcurrency: SAFETY_LIMITS.emailEnrichmentConcurrency,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/automation/tick", async (req, res) => {
     const auth = authorizeCronRequest(req.headers.authorization);
     if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
