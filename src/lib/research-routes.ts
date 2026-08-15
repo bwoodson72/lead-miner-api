@@ -3,6 +3,7 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { calculatePriority, researchLead, RESEARCH_VERSION } from "./ai-research.js";
 import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js";
 import { getAppSettings } from "./settings.js";
+import { estimateAiCost } from "./ai-cost.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -15,7 +16,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   if (!lead || lead.qualificationDecision !== "qualified" || !lead.email) return null;
 
   const existing = await prisma.outreachMessage.findFirst({
-    where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sent"] } },
+    where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } },
     orderBy: { generatedAt: "desc" },
   });
   if (existing) {
@@ -32,7 +33,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       const message = await tx.outreachMessage.create({ data: { leadId, kind: "initial", sequenceNumber: 1, subject: generated.draft.subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, status, approvedAt: shouldAutoApprove ? new Date() : null } });
       await tx.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
       await tx.activity.create({ data: { leadId, type: shouldAutoApprove ? "message_auto_approved" : "message_generated", summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`, metadata: { confidence: generated.draft.confidence, model: generated.model, approvalMode: settings.approvalMode } } });
-      await tx.aIJob.update({ where: { id: aiJob.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, completedAt: new Date() } });
+      await tx.aIJob.update({ where: { id: aiJob.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
       return message;
     });
   } catch (error) {
@@ -58,7 +59,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
       await tx.leadScore.create({ data: { leadId, ...result.scores, compositeScore: priorityScore, model, researchVersion: RESEARCH_VERSION } });
       await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.qualificationReason, priorityScore, primaryOutreachAngle: result.primaryOutreachAngle, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date() } });
       await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model } } });
-      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, completedAt: new Date() } });
+      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
     });
     let draft = null;
     if (result.decision === "qualified") { try { draft = await ensureInitialOutreachDraft(prisma, leadId); } catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); } }
