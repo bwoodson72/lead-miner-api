@@ -1,7 +1,7 @@
 import { Resend } from "resend";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getEnv } from "./env.js";
-import { getAppSettings } from "./settings.js";
+import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 
@@ -32,7 +32,8 @@ function gmailRfcMessageId(messageId: number, senderEmail: string) {
 
 async function providerSend(prisma: PrismaClient, message: any, settings: any, key: string) {
   if (settings.emailProvider === "gmail") {
-    const prior = await prisma.outreachMessage.findFirst({ where: { leadId: message.leadId, status: "sent", providerThreadId: { not: null } }, orderBy: { sequenceNumber: "desc" } });
+    const thread = await prisma.emailThread.findFirst({ where: { leadId: message.leadId, provider: "gmail", status: "open" }, orderBy: { updatedAt: "desc" } });
+    const prior = await prisma.outreachMessage.findFirst({ where: { leadId: message.leadId, status: "sent", providerMessageId: { not: null } }, orderBy: { sequenceNumber: "desc" } });
     let inReplyToMessageId: string | null = null;
     if (prior?.providerMessageId) {
       try { inReplyToMessageId = (await getGmailMessage(prior.providerMessageId)).rfcMessageId; } catch { inReplyToMessageId = null; }
@@ -44,7 +45,7 @@ async function providerSend(prisma: PrismaClient, message: any, settings: any, k
       subject: message.subject,
       bodyText: message.bodyText,
       messageId: gmailRfcMessageId(message.id, settings.senderEmail),
-      threadId: prior?.providerThreadId ?? null,
+      threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
       inReplyToMessageId,
     });
     return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
@@ -75,14 +76,22 @@ async function assertSendEligible(prisma: PrismaClient, messageId: number) {
 }
 
 async function completeSend(prisma: PrismaClient, message: any, settings: any, provider: { providerMessageId: string; providerThreadId: string | null; reconciled: boolean }) {
+  const sequence = await getActiveOutreachSequence(prisma);
   const sentAt = new Date();
-  const followUpDate = nextFollowUpDate(settings.followUpDelaysDays, message.sequenceNumber);
+  const followUpDate = nextFollowUpDate(sequence.delaysDays, message.sequenceNumber);
   const nextStatus = followUpDate ? "contacted" : "closed_no_response";
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
     await tx.lead.update({ where: { id: message.leadId }, data: { status: nextStatus, outreachCount: { increment: 1 }, firstContactAt: message.lead.firstContactAt ?? sentAt, lastOutreachDate: sentAt, followUpDate } });
-    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${message.sequenceNumber - 1}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: settings.emailProvider, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, idempotencyKey: message.idempotencyKey } } });
+    if (provider.providerThreadId) {
+      await tx.emailThread.upsert({
+        where: { providerThreadId: provider.providerThreadId },
+        update: { leadId: message.leadId, provider: settings.emailProvider, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
+        create: { leadId: message.leadId, provider: settings.emailProvider, providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
+      });
+    }
+    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${message.sequenceNumber - 1}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: settings.emailProvider, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey } } });
     return updated;
   });
 }
