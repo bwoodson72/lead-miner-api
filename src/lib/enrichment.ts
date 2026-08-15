@@ -205,8 +205,19 @@ async function serperEmailSearch(domain: string, businessName?: string): Promise
 export async function enrichLeadFromSite(input: EnrichmentInput): Promise<EnrichmentResult> {
   const startTime = Date.now(); const notes: string[] = [];
   console.log(`[Enrichment] Starting enrichment for ${input.url}`);
+  const inputDomain = new URL(input.url).hostname.replace(/^www\./,"");
   const homepage = await fetchHomepage(input.url);
-  if (!homepage) return { enrichmentStatus:"failed", enrichmentNotes:"Failed to fetch homepage across protocol/host variants" };
+  if (!homepage) {
+    notes.push("Homepage unavailable across protocol/host variants");
+    const indexedEmail = await serperEmailSearch(inputDomain, input.existingBusinessName);
+    const elapsed = Date.now() - startTime;
+    if (indexedEmail) {
+      notes.push("Found email via search-index fallback despite unreachable site");
+      console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=yes, elapsed=${elapsed}ms`);
+      return { ...(input.existingBusinessName && { businessName: input.existingBusinessName }), email: indexedEmail, enrichmentStatus: "enriched", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms` };
+    }
+    return { enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; search-index fallback found no email; elapsed=${elapsed}ms` };
+  }
 
   const url = homepage.finalUrl;
   const siteDomain = new URL(url).hostname.replace(/^www\./,"");
