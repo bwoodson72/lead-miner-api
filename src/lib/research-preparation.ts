@@ -22,6 +22,13 @@ export type ResearchPreparationResult = {
 
 type EnrichLeadEmailFn = typeof enrichLeadEmail;
 
+export class ResearchPreparationError extends Error {
+  constructor(public readonly preparation: ResearchPreparationResult) {
+    super(preparation.reason ?? `Lead is not research-ready (${preparation.status})`);
+    this.name = "ResearchPreparationError";
+  }
+}
+
 /**
  * Ensures contact discovery has had an eligible chance to run before AI research.
  * This deliberately respects exhausted and future retry states so clicking Research
@@ -156,4 +163,45 @@ export async function prepareLeadForResearch(
       reason: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * Core research contact gate. Every research path should use this instead of
+ * assuming Lead.email was already populated by an outer route or batch worker.
+ * It prepares the lead, then re-reads the full record so the AI always receives
+ * the email that enrichment actually persisted.
+ */
+export async function getPreparedLeadForResearch(
+  prisma: PrismaClient,
+  leadId: number,
+  enrich: EnrichLeadEmailFn = enrichLeadEmail,
+  now = new Date(),
+) {
+  const preparation = await prepareLeadForResearch(prisma, leadId, enrich, now);
+  if (!preparation.ready) throw new ResearchPreparationError(preparation);
+
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  if (!lead) {
+    throw new ResearchPreparationError({
+      leadId,
+      ready: false,
+      status: "missing",
+      email: null,
+      alreadyHadEmail: preparation.alreadyHadEmail,
+      enrichmentAttempted: preparation.enrichmentAttempted,
+      reason: "Lead not found after contact preparation",
+    });
+  }
+
+  if (!lead.email) {
+    throw new ResearchPreparationError({
+      ...preparation,
+      ready: false,
+      status: "failed",
+      email: null,
+      reason: "Contact enrichment reported the lead as research-ready, but no email was persisted",
+    });
+  }
+
+  return { lead, preparation };
 }
