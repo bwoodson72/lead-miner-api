@@ -124,6 +124,7 @@ model OutreachMessage {
   sentAt DateTime? @map("sent_at")
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, sentAt])
+  @@index([providerThreadId])
   @@index([status])
   @@map("outreach_messages")
 }
@@ -168,8 +169,6 @@ model AppSettings {
   approvalMode String @default("manual") @map("approval_mode")
   researchModel String @default("gpt-5.6-luna") @map("research_model")
   outreachModel String @default("gpt-5.6-luna") @map("outreach_model")
-  researchInstructions String @default("Evaluate whether this business is a strong web-development prospect. Prioritize concrete website problems that create business friction, weak credibility, poor conversion paths, weak local-search foundations, or wasted paid-traffic opportunity. Prefer problems that can support a specific outreach angle. Disqualify businesses that are clearly a poor fit or have no meaningful web opportunity.") @map("research_instructions")
-  outreachInstructions String @default("Write a concise personalized cold email in plain business language. Focus on one specific problem and why it matters to the business. Do not dump an audit or use technical jargon. Avoid generic compliments, fake familiarity, hype, and placeholders. Use a low-friction call to action aimed at starting a conversation or booking a consultation.") @map("outreach_instructions")
   researchBatchSize Int @default(10) @map("research_batch_size")
   minAutoApprovePriority Int @default(75) @map("min_auto_approve_priority")
   minAutoApproveConfidence Float @default(0.85) @map("min_auto_approve_confidence")
@@ -180,6 +179,11 @@ model AppSettings {
   followUpDelaysDays Json @default("[4,6,10]") @map("follow_up_delays_days")
   senderName String @default("Brian Woodson") @map("sender_name")
   senderEmail String @default("leads@brianwoodson.dev") @map("sender_email")
+  emailProvider String @default("resend") @map("email_provider")
+  followUpInstructions String @default("Write a concise natural continuation of the existing cold outreach thread. Use only stored research and prior messages. Never say just following up, checking in, circling back, touching base, or bumping this. Do not invent new problems or metrics. Follow-up 1 reinforces the original problem briefly. Follow-up 2 adds another evidence-supported perspective on the same opportunity. Follow-up 3 is a brief low-pressure final message. Use one CTA and no new subject line.") @map("follow_up_instructions") @db.Text
+  replyInstructions String @default("Classify the prospect reply by intent using only the message content and thread context. Distinguish interested, question, objection, not_now, not_interested, wrong_person, referral, out_of_office, bounce, unsubscribe, booking_intent, and other. Summarize what the prospect wants and recommend the next human action. Do not draft or send a reply.") @map("reply_instructions") @db.Text
+  researchInstructions String @default("Evaluate this business as a potential client for custom web development. Use only supplied evidence. Identify concrete business-impact problems, qualify conservatively, and choose one strong evidence-backed outreach angle. Technical performance data may support analysis but should not by itself qualify a lead.") @map("research_instructions") @db.Text
+  outreachInstructions String @default("Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.") @map("outreach_instructions") @db.Text
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   @@map("app_settings")
