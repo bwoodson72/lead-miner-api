@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
+import { fetchWithProviderBackoff } from "./provider-retry.js";
 
 export const ResearchResultSchema = z.object({
   decision: z.enum(["qualified", "disqualified", "needs_review"]),
@@ -70,6 +71,6 @@ export async function researchLead(lead:ResearchLead, model:string, editableInst
   const website=await fetchWebsitePacket(lead.landingPageUrl);
   const evidence={lead,website};
   const systemInstructions=`${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_RESEARCH_RULES}`;
-  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`,"Content-Type":"application/json"},body:JSON.stringify({model,input:[{role:"system",content:[{type:"input_text",text:systemInstructions}]},{role:"user",content:[{type:"input_text",text:`Analyze this Lead Miner evidence packet:\n${JSON.stringify(evidence)}`}]}],text:{format:{type:"json_schema",name:"lead_research",strict:true,schema:jsonSchema()}}})});
+  const response=await fetchWithProviderBackoff("https://api.openai.com/v1/responses",{method:"POST",headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`,"Content-Type":"application/json"},body:JSON.stringify({model,input:[{role:"system",content:[{type:"input_text",text:systemInstructions}]},{role:"user",content:[{type:"input_text",text:`Analyze this Lead Miner evidence packet:\n${JSON.stringify(evidence)}`}]}],text:{format:{type:"json_schema",name:"lead_research",strict:true,schema:jsonSchema()}}})},"OpenAI research");
   if(!response.ok)throw new Error(`OpenAI research failed (${response.status}): ${await response.text()}`);const data=await response.json() as any;const raw=data.output_text??data.output?.flatMap((o:any)=>o.content??[]).find((c:any)=>c.type==="output_text")?.text;if(!raw)throw new Error("OpenAI returned no structured research output");return {result:ResearchResultSchema.parse(JSON.parse(raw)),model:data.model??model,inputTokens:data.usage?.input_tokens,outputTokens:data.usage?.output_tokens};
 }
