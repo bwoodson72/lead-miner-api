@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
+import { ensureInitialOutreachDraft } from "./research-routes.js";
 
 export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   app.get("/api/outreach/review", async (_req, res) => {
@@ -17,6 +18,35 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
         },
       });
       res.json({ messages, total: messages.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/outreach/backfill-drafts", async (_req, res) => {
+    try {
+      const leads = await prisma.lead.findMany({
+        where: {
+          qualificationDecision: "qualified",
+          email: { not: null },
+          status: { in: ["qualified", "ready_for_outreach"] },
+          outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sent"] } } },
+        },
+        orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+        take: 25,
+        select: { id: true },
+      });
+
+      const results: Array<{ leadId: number; success: boolean; messageId?: number; error?: string }> = [];
+      for (const lead of leads) {
+        try {
+          const message = await ensureInitialOutreachDraft(prisma, lead.id);
+          results.push({ leadId: lead.id, success: true, messageId: message?.id });
+        } catch (error) {
+          results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      res.json({ processed: results.length, results });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
