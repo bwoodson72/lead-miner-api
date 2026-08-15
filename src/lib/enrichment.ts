@@ -1,6 +1,7 @@
 import { detectAgency } from "./agency-filter.js";
 import { detectNationalChain } from "./chain-filter.js";
 import { getEnv } from "./env.js";
+import { fetchWithProviderBackoff } from "./provider-retry.js";
 
 export type EnrichmentResult = {
   businessName?: string;
@@ -189,7 +190,7 @@ async function serperEmailSearch(domain: string, businessName?: string): Promise
   const queries = [`site:${domain} "@${domain}"`, businessName ? `"${businessName}" email` : `"${domain}" email`];
   for (const q of queries) {
     try {
-      const response = await fetch("https://google.serper.dev/search", { method:"POST", headers:{"X-API-KEY":env.SERPER_API_KEY,"Content-Type":"application/json"}, body:JSON.stringify({ q, gl:"us", hl:"en", num:10 }) });
+      const response = await fetchWithProviderBackoff("https://google.serper.dev/search", { method:"POST", headers:{"X-API-KEY":env.SERPER_API_KEY,"Content-Type":"application/json"}, body:JSON.stringify({ q, gl:"us", hl:"en", num:10 }) }, "Serper email search");
       if (!response.ok) continue;
       const data = await response.json() as Record<string, unknown>;
       const chunks: string[] = [];
