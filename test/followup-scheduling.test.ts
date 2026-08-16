@@ -19,18 +19,14 @@ test("outreach sequence is initial plus four follow-ups", () => {
 });
 
 test("follow-up schedule selects four delays and stops after breakup", () => {
-  const originalNow = Date.now;
-  Date.now = () => Date.UTC(2026, 7, 15, 12, 0, 0);
-  try {
-    assert.equal(nextFollowUpDate([4, 6, 10, 14], 1)?.toISOString(), "2026-08-19T12:00:00.000Z");
-    assert.equal(nextFollowUpDate([4, 6, 10, 14], 2)?.toISOString(), "2026-08-21T12:00:00.000Z");
-    assert.equal(nextFollowUpDate([4, 6, 10, 14], 3)?.toISOString(), "2026-08-25T12:00:00.000Z");
-    assert.equal(nextFollowUpDate([4, 6, 10, 14], 4)?.toISOString(), "2026-08-29T12:00:00.000Z");
-    assert.equal(nextFollowUpDate([4, 6, 10, 14], 5), null);
-    assert.equal(nextFollowUpDate([4, 6, 10, 14, 30], 5), null);
-  } finally {
-    Date.now = originalNow;
-  }
+  const from = new Date("2026-08-15T12:00:00.000Z");
+  const options = { from };
+  assert.equal(nextFollowUpDate([4, 6, 10, 14], 1, options)?.toISOString(), "2026-08-19T12:00:00.000Z");
+  assert.equal(nextFollowUpDate([4, 6, 10, 14], 2, options)?.toISOString(), "2026-08-21T12:00:00.000Z");
+  assert.equal(nextFollowUpDate([4, 6, 10, 14], 3, options)?.toISOString(), "2026-08-25T12:00:00.000Z");
+  assert.equal(nextFollowUpDate([4, 6, 10, 14], 4, options)?.toISOString(), "2026-08-29T12:00:00.000Z");
+  assert.equal(nextFollowUpDate([4, 6, 10, 14], 5, options), null);
+  assert.equal(nextFollowUpDate([4, 6, 10, 14, 30], 5, options), null);
 });
 
 test("legacy schedules are normalized to four follow-ups", () => {
