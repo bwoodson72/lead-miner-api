@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getSendIneligibilityReason, isWithinSendWindow, makeGmailRfcMessageId, makeOutreachIdempotencyKey } from "../src/lib/workflow-policy.js";
+import { getSendIneligibilityReason, isWithinSendWindow, makeGmailRfcMessageId, makeOutreachIdempotencyKey, nextEligibleSendTime } from "../src/lib/workflow-policy.js";
 
 function eligibleLead() {
   return { email: "owner@example.com", domain: "example.com", status: "ready_for_outreach", replyStatus: null, lastReplyAt: null, suppressions: [] as Array<{ value: string }> };
@@ -16,7 +16,7 @@ test("reply state blocks all additional outreach", () => {
 });
 
 test("terminal CRM statuses block sending", () => {
-  for (const status of ["interested", "won", "lost", "rejected", "bounced", "unsubscribed", "closed_no_response"]) {
+  for (const status of ["interested", "won", "lost", "rejected", "held", "bounced", "unsubscribed", "closed_no_response"]) {
     assert.match(getSendIneligibilityReason({ ...eligibleLead(), status }) ?? "", /not send-eligible/);
   }
 });
@@ -32,10 +32,16 @@ test("idempotency identities are deterministic", () => {
   assert.equal(makeGmailRfcMessageId(42, "brian@brianwoodson.dev"), "<lead-miner-outreach-42@brianwoodson.dev>");
 });
 
-test("send window includes boundaries and excludes outside times", () => {
-  const at = (hour: number, minute: number) => new Date(2026, 7, 15, hour, minute, 0, 0);
-  assert.equal(isWithinSendWindow("09:00", "16:30", at(9, 0)), true);
-  assert.equal(isWithinSendWindow("09:00", "16:30", at(16, 30)), true);
-  assert.equal(isWithinSendWindow("09:00", "16:30", at(8, 59)), false);
-  assert.equal(isWithinSendWindow("09:00", "16:30", at(16, 31)), false);
+test("send window includes boundaries in configured timezone", () => {
+  const atCentral = (hour: number, minute: number) => new Date(Date.UTC(2026, 7, 17, hour + 5, minute, 0, 0));
+  assert.equal(isWithinSendWindow("09:00", "16:30", atCentral(9, 0), "America/Chicago", false), true);
+  assert.equal(isWithinSendWindow("09:00", "16:30", atCentral(16, 30), "America/Chicago", false), true);
+  assert.equal(isWithinSendWindow("09:00", "16:30", atCentral(8, 59), "America/Chicago", false), false);
+  assert.equal(isWithinSendWindow("09:00", "16:30", atCentral(16, 31), "America/Chicago", false), false);
+});
+
+test("weekends roll to next eligible business window", () => {
+  const saturdayNoonCentral = new Date("2026-08-15T17:00:00.000Z");
+  assert.equal(isWithinSendWindow("09:00", "16:30", saturdayNoonCentral, "America/Chicago", false), false);
+  assert.equal(nextEligibleSendTime(saturdayNoonCentral, "09:00", "16:30", "America/Chicago", false).toISOString(), "2026-08-17T14:00:00.000Z");
 });
