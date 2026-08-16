@@ -16,6 +16,7 @@ const BLOCKED_SEND_STATUSES = new Set([
   "won",
   "lost",
   "rejected",
+  "held",
   "bounced",
   "unsubscribed",
   "closed_no_response",
@@ -25,7 +26,6 @@ export function getSendIneligibilityReason(lead: SendEligibilityLead): string | 
   if (!lead.email) return "Lead has no email address";
   if (lead.replyStatus || lead.lastReplyAt) return "Lead has already replied";
   if (BLOCKED_SEND_STATUSES.has(lead.status)) return `Lead status ${lead.status} is not send-eligible`;
-
   const email = lead.email.toLowerCase();
   const domain = lead.domain.toLowerCase();
   const suppressed = lead.suppressions.some((suppression) => {
@@ -45,9 +45,47 @@ export function makeGmailRfcMessageId(messageId: number, senderEmail: string) {
   return `<lead-miner-outreach-${messageId}@${domain}>`;
 }
 
-export function isWithinSendWindow(start: string, end: string, now = new Date()): boolean {
-  const minutes = now.getHours() * 60 + now.getMinutes();
+function timeParts(now: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return { weekday: value("weekday"), hour: Number(value("hour")), minute: Number(value("minute")) };
+}
+
+export function isWithinSendWindow(
+  start: string,
+  end: string,
+  now = new Date(),
+  timeZone = "America/Chicago",
+  weekendSendingEnabled = false,
+): boolean {
+  const parts = timeParts(now, timeZone);
+  if (!weekendSendingEnabled && (parts.weekday === "Sat" || parts.weekday === "Sun")) return false;
+  const minutes = parts.hour * 60 + parts.minute;
   const [sh, sm] = start.split(":").map(Number);
   const [eh, em] = end.split(":").map(Number);
-  return minutes >= sh * 60 + sm && minutes <= eh * 60 + em;
+  const startMinutes = sh * 60 + sm;
+  const endMinutes = eh * 60 + em;
+  return startMinutes <= endMinutes
+    ? minutes >= startMinutes && minutes <= endMinutes
+    : minutes >= startMinutes || minutes <= endMinutes;
+}
+
+export function nextEligibleSendTime(
+  target: Date,
+  start: string,
+  end: string,
+  timeZone = "America/Chicago",
+  weekendSendingEnabled = false,
+): Date {
+  let candidate = new Date(target);
+  if (candidate.getSeconds() || candidate.getMilliseconds()) {
+    candidate = new Date(candidate.getTime() + 60_000);
+    candidate.setSeconds(0, 0);
+  }
+  const maxMinutes = 14 * 24 * 60;
+  for (let i = 0; i <= maxMinutes; i++) {
+    if (isWithinSendWindow(start, end, candidate, timeZone, weekendSendingEnabled)) return candidate;
+    candidate = new Date(candidate.getTime() + 60_000);
+  }
+  throw new Error("Could not find an eligible send window within 14 days");
 }
