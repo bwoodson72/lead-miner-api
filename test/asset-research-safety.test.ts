@@ -49,6 +49,20 @@ test("crawler failure cannot become a visitor-reachability defect", () => {
   assert.equal(safe.significance, "low");
 });
 
+test("search-index-only findings cannot be high-confidence high-significance defects", () => {
+  const safe = applyAssetFindingSafety({
+    category: "site_maturity",
+    title: "Indexed service footprint appears limited",
+    evidence: "Google returned only a small set of same-domain service pages in the bounded site search.",
+    assetCapability: "May indicate a limited indexed representation of the service offering.",
+    confidence: 0.94,
+    significance: "high" as const,
+    evidenceSources: ["search_index", "site_coverage"] as const,
+  });
+  assert.equal(safe.confidence, 0.65);
+  assert.equal(safe.significance, "medium");
+});
+
 test("ordinary objective defects are not suppressed by the reachability guard", () => {
   const finding = {
     category: "objective_defect",
