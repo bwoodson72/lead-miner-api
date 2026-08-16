@@ -2,18 +2,16 @@ export function leadStatusForReply(classification: string): string {
   if (classification === "interested" || classification === "booking_intent") return "interested";
   if (classification === "bounce") return "bounced";
   if (classification === "unsubscribe") return "unsubscribed";
+  if (classification === "spam_or_scam") return "rejected";
+  if (classification === "not_interested") return "lost";
+  if (classification === "out_of_office") return "contacted";
   return "replied";
 }
 
 export function replyRequiresSuppression(classification: string): boolean {
-  return classification === "bounce" || classification === "unsubscribe";
+  return classification === "bounce" || classification === "unsubscribe" || classification === "spam_or_scam";
 }
 
-/**
- * Stop future outreach after an inbound reply. Draft/approved messages are safe to
- * cancel. Messages already in `sending` are deliberately left alone because the
- * provider call may already be in flight and cannot be reliably unsent.
- */
 export async function applyReplyAutomationStop(
   tx: any,
   input: { leadId: number; classification: string; email: string | null },
