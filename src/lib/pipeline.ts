@@ -3,7 +3,6 @@ import { discoverLocalizedCandidates, resolveLocalizedSearchSpec } from "./local
 import { normalizeUrl, extractRootDomain } from "./normalize-url.js";
 import { analyzeUrlsWithRateLimit, type PageSpeedResult } from "./pagespeed.js";
 import { isSlowSite, buildLeadRecord } from "./filters.js";
-import { sendReport } from "./email.js";
 import { type KeywordInput, type LeadRecord } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 import { isFranchise } from "./franchise-filter.js";
@@ -17,11 +16,11 @@ type Diagnostics = {
   paidDomainsQueued: number; organicDomainsQueued: number; franchisesFiltered: number; pageSpeedResults: number; pageSpeedFailures: number;
   slowSites: number; leadsEnriched: number; enrichmentFailures: number; emailsFound: number; phonesFound: number; skippedNoEmail: number;
   dbCreated: number; dbUpdated: number; dbFailed: number; aiResearched: number; aiResearchFailed: number; draftsGenerated: number;
-  emailSent: boolean; messages: string[];
+  messages: string[];
 };
 
 export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (stage: string, detail: string) => void): Promise<{ leads: LeadRecord[]; keywords: string[]; diagnostics: Diagnostics }> {
-  const diagnostics: Diagnostics = { keywordsParsed: 0, adsFound: 0, paidAdsFound: 0, organicBusinessesFound: 0, uniqueDomains: 0, paidDomainsQueued: 0, organicDomainsQueued: 0, franchisesFiltered: 0, pageSpeedResults: 0, pageSpeedFailures: 0, slowSites: 0, leadsEnriched: 0, enrichmentFailures: 0, emailsFound: 0, phonesFound: 0, skippedNoEmail: 0, dbCreated: 0, dbUpdated: 0, dbFailed: 0, aiResearched: 0, aiResearchFailed: 0, draftsGenerated: 0, emailSent: false, messages: [] };
+  const diagnostics: Diagnostics = { keywordsParsed: 0, adsFound: 0, paidAdsFound: 0, organicBusinessesFound: 0, uniqueDomains: 0, paidDomainsQueued: 0, organicDomainsQueued: 0, franchisesFiltered: 0, pageSpeedResults: 0, pageSpeedFailures: 0, slowSites: 0, leadsEnriched: 0, enrichmentFailures: 0, emailsFound: 0, phonesFound: 0, skippedNoEmail: 0, dbCreated: 0, dbUpdated: 0, dbFailed: 0, aiResearched: 0, aiResearchFailed: 0, draftsGenerated: 0, messages: [] };
   const keywords = input.keywords.split("\n").map((k) => k.trim()).filter(Boolean);
   diagnostics.keywordsParsed = keywords.length;
   const thresholds: Thresholds = { performanceScore: input.performanceScore, lcp: input.lcp, cls: input.cls, tbt: input.tbt };
@@ -89,10 +88,6 @@ export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (s
       catch (error) { diagnostics.aiResearchFailed++; diagnostics.messages.push(`AI research failed for lead ${id}: ${error instanceof Error ? error.message : String(error)}`); }
     }
   }
-  onProgress?.("emailing", "Sending report email...");
-  const emailResult = await sendReport(leads, keywords, input.email);
-  diagnostics.emailSent = emailResult.success;
-  if (!emailResult.success) diagnostics.messages.push(`Email failed: ${emailResult.error ?? "unknown error"}`);
   onProgress?.("complete", `Done — ${leads.length} leads found; ${diagnostics.skippedNoEmail} skipped for no email; ${diagnostics.aiResearched} AI researched; ${diagnostics.draftsGenerated} drafts generated`);
   return { leads, keywords, diagnostics };
 }
