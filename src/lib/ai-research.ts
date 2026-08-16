@@ -10,10 +10,10 @@ import { assessPerformance, type PerformanceAssessment } from "./performance-ass
 import {
   fetchBusinessAssetResearchPacket,
   type BusinessAssetResearchPacket,
-} from "./research-site-v6.js";
+} from "./research-site-v8.js";
 
 export type { WebsiteResearchPacket } from "./research-site.js";
-export type { BusinessAssetResearchPacket } from "./research-site-v6.js";
+export type { BusinessAssetResearchPacket } from "./research-site-v8.js";
 
 const EvidenceSourceSchema = z.enum(RESEARCH_EVIDENCE_SOURCES);
 const RatingSchema = z.enum(["strong", "adequate", "constrained", "weak", "unknown"]);
@@ -82,7 +82,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v7";
+export const RESEARCH_VERSION = "lead-research-v8";
 
 function dimensionJsonSchema() {
   return {
@@ -151,7 +151,10 @@ const HARD_RESEARCH_RULES = [
   "Use only supplied evidence. Never invent traffic, bounce rate, conversions, revenue, ad spend, customer behavior, budget, business plans, growth, rankings, security failures, maintainability costs, or functionality not established by the packet.",
   "Measured performance is pre-classified deterministically in performanceAssessment using Google ranges. Interpret its severity; do not redefine or recalculate the bands.",
   "A severe performance signal can materially constrain the website as an acquisition asset and may independently make rebuild consideration reasonable. Poor performance does not automatically require a rebuild when the rest of the asset appears substantial and capable.",
-  "A Lead Miner crawler fetch failure is only an inspection failure. It is never proof that normal visitors cannot reach the website. Never describe a website, homepage, page, or domain as down, offline, unreachable, unavailable, or inaccessible based on fetchError, a null finalUrl, siteCoverage, crawlerAccess, or enrichment notes. If the crawler cannot inspect the site, mark the affected capability dimensions unknown and use NEEDS_REVIEW rather than creating an objective reachability defect.",
+  "A Lead Miner crawler fetch failure is only an inspection failure. It is never proof that normal visitors cannot reach the website. Never describe a website, homepage, page, or domain as down, offline, unreachable, unavailable, or inaccessible based on fetchError, a null finalUrl, siteCoverage, crawlerAccess, or enrichment notes.",
+  "If direct crawling fails but searchIndexEvidence contains same-domain pages, use search_index only as bounded first-party evidence about indexed page topics, apparent architecture, demand alignment, business representation, and site maturity. Search-index evidence may lag the live site and cannot establish current visitor reachability, current rendered content, forms, working interactions, or page completeness.",
+  "Do not create a customer-action deficiency solely from search-index evidence. If the direct crawler did not inspect the live site, customerActionCapability should normally be unknown unless another supplied evidence source independently establishes it.",
+  "Do not choose REBUILD_CANDIDATE from search-index evidence alone. A rebuild decision requires stronger direct evidence; use NEEDS_REVIEW if replacement would otherwise be the conclusion while live inspection is unavailable.",
   "Enrichment notes describe Lead Miner's enrichment process and may contain historical crawler failures. They are not independent visitor-reachability evidence and must not override a successful current research fetch.",
   "Assess demand alignment semantically using the lead keyword and supplied website evidence. Exact keyword matching is not required.",
   "Assess business representation by how meaningfully the site explains the business and its apparent services. Do not require a particular number of pages or assume every service needs its own page.",
@@ -167,25 +170,56 @@ const HARD_RESEARCH_RULES = [
   "REBUILD_CANDIDATE means the observable capability gap is substantial enough that a new implementation is a reasonable option. OPTIMIZATION_CANDIDATE means the asset appears fundamentally capable but has material fixable limitations that do not clearly justify replacement. NO_MATERIAL_OPPORTUNITY means the supplied evidence does not show a meaningful enough gap to pursue a rebuild. NEEDS_REVIEW means the evidence is too incomplete or conflicting to choose safely.",
   "Identify both the strongest capabilities and the most important limitations in the research summary. Distinguish isolated weaknesses from cumulative asset inadequacy.",
   "Research does not choose an outreach angle, estimate ability to pay, assign sales urgency, or recommend messaging. Those belong to later pipeline stages.",
-  "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled page summaries and site_coverage for bounded crawl/sitemap evidence.",
+  "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled direct page summaries, search_index for indexed first-party titles/snippets, and site_coverage for bounded crawl/sitemap evidence.",
   "Return only the required structured result.",
 ].join(" ");
+
+function capIndexedDimension<T extends ResearchResult["dimensions"]["demandAlignment"]>(dimension: T): T {
+  if (!dimension.evidenceSources.includes("search_index")) return dimension;
+  return { ...dimension, confidence: Math.min(dimension.confidence, 0.65) };
+}
+
+function unknownDimension(label: string): ResearchResult["dimensions"]["demandAlignment"] {
+  return {
+    rating: "unknown",
+    evidence: `Lead Miner's direct crawler could not inspect enough current website content to assess ${label} reliably. Search-index evidence is not sufficient for this interactive capability.`,
+    evidenceSources: ["site_coverage"],
+    confidence: 0.2,
+  };
+}
 
 function applyCrawlerFailureSafety(result: ResearchResult, website: BusinessAssetResearchPacket): ResearchResult {
   const findings = result.findings
     .map(applyAssetFindingSafety)
     .filter((finding) => !isUnsupportedCrawlerReachabilityFinding(finding));
 
-  if (website.finalUrl && !website.fetchError) {
-    return { ...result, findings };
-  }
+  if (website.finalUrl && !website.fetchError) return { ...result, findings };
 
-  const unknownDimension = (label: string): ResearchResult["dimensions"]["demandAlignment"] => ({
-    rating: "unknown",
-    evidence: `Lead Miner's crawler could not inspect enough current website content to assess ${label} reliably. This is crawler uncertainty, not evidence that visitors cannot access the site.`,
-    evidenceSources: ["site_coverage"],
-    confidence: 0.2,
-  });
+  const indexedFallbackAvailable = website.searchIndexEvidence.succeeded && website.searchIndexEvidence.pages.length >= 3;
+  if (indexedFallbackAvailable) {
+    const rebuildBlocked = result.decision === "rebuild_candidate";
+    return {
+      ...result,
+      decision: rebuildBlocked ? "needs_review" : result.decision,
+      assetStrength: rebuildBlocked ? "unknown" : result.assetStrength,
+      dimensions: {
+        ...result.dimensions,
+        demandAlignment: capIndexedDimension(result.dimensions.demandAlignment),
+        businessRepresentation: capIndexedDimension(result.dimensions.businessRepresentation),
+        customerActionCapability: unknownDimension("customer-action capability"),
+        acquisitionReadiness: capIndexedDimension(result.dimensions.acquisitionReadiness),
+        siteMaturity: capIndexedDimension(result.dimensions.siteMaturity),
+      },
+      findings,
+      researchSummary: rebuildBlocked
+        ? `${result.researchSummary} Lead Miner could not directly inspect the live pages, so indexed first-party evidence is insufficient to support a rebuild decision without review.`
+        : result.researchSummary,
+      decisionReason: rebuildBlocked
+        ? "Needs review because the direct crawler could not inspect the live site and a rebuild decision cannot be based on search-index evidence alone."
+        : result.decisionReason,
+      confidence: Math.min(result.confidence, 0.65),
+    };
+  }
 
   return {
     ...result,
@@ -200,8 +234,8 @@ function applyCrawlerFailureSafety(result: ResearchResult, website: BusinessAsse
       siteMaturity: unknownDimension("site maturity"),
     },
     findings,
-    researchSummary: "Lead Miner could not inspect enough current website content during this research run to assess the website as a whole. The measured performance evidence remains available, but the other business-asset dimensions require review. The crawler failure itself is not evidence that the website is unavailable to visitors.",
-    decisionReason: "Needs review because the current crawler could not gather enough website evidence for a reliable business-asset assessment. Do not treat the crawler failure as a website outage.",
+    researchSummary: "Lead Miner could not inspect enough current website content during this research run and did not obtain enough same-domain indexed evidence to assess the website as a whole. The measured performance evidence remains available, but the other business-asset dimensions require review. The crawler failure itself is not evidence that the website is unavailable to visitors.",
+    decisionReason: "Needs review because neither direct crawling nor the bounded search-index fallback produced enough website evidence for a reliable business-asset assessment.",
     confidence: Math.min(result.confidence, 0.35),
   };
 }
