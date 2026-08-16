@@ -45,6 +45,8 @@ model Lead {
   researchSummary String? @map("research_summary")
   researchVersion String? @map("research_version")
   lastResearchedAt DateTime? @map("last_researched_at")
+  assetStrength String? @map("asset_strength")
+  assetAssessment Json? @map("asset_assessment")
   replyStatus String? @map("reply_status")
   replySummary String? @map("reply_summary")
   lastReplyAt DateTime? @map("last_reply_at")
@@ -62,6 +64,7 @@ model Lead {
   suppressions Suppression[]
   contacts Contact[]
   emailThreads EmailThread[]
+  assetAssessments LeadAssetAssessment[]
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   @@index([status, priorityScore])
@@ -226,6 +229,44 @@ model AIJob {
   @@map("ai_jobs")
 }
 
+model LeadAssetAssessment {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  decision String
+  assetStrength String @map("asset_strength")
+  dimensions Json
+  performanceAssessment Json @map("performance_assessment")
+  siteCoverage Json @map("site_coverage")
+  researchSummary String @map("research_summary") @db.Text
+  decisionReason String @map("decision_reason") @db.Text
+  confidence Float
+  model String
+  researchVersion String @map("research_version")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  findings LeadFinding[]
+  @@index([leadId, createdAt])
+  @@index([decision, createdAt])
+  @@map("lead_asset_assessments")
+}
+
+model LeadFinding {
+  id Int @id @default(autoincrement())
+  assessmentId Int @map("assessment_id")
+  category String
+  title String
+  evidence String @db.Text
+  assetCapability String @map("asset_capability") @db.Text
+  confidence Float
+  significance String
+  evidenceSources Json @map("evidence_sources")
+  createdAt DateTime @default(now()) @map("created_at")
+  assessment LeadAssetAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  @@index([assessmentId])
+  @@index([category, significance])
+  @@map("lead_findings")
+}
+
 model AutomationLock {
   name String @id
   token String
@@ -255,7 +296,7 @@ model AppSettings {
   senderEmail String @default("leads@brianwoodson.dev") @map("sender_email")
   followUpInstructions String @default("Write a concise natural continuation of the existing cold outreach thread. Use only stored research and prior messages. Never say just following up, checking in, circling back, touching base, or bumping this. Do not invent new problems or metrics. Follow-up 1 reinforces the original problem briefly. Follow-up 2 adds another evidence-supported perspective on the same opportunity. Follow-up 3 is a brief low-pressure final message. Use one CTA and no new subject line.") @map("follow_up_instructions") @db.Text
   replyInstructions String @default("Classify the prospect reply by intent using only the message content and thread context. Distinguish interested, question, objection, not_now, not_interested, wrong_person, referral, out_of_office, bounce, unsubscribe, booking_intent, and other. Summarize what the prospect wants and recommend the next human action. Do not draft or send a reply.") @map("reply_instructions") @db.Text
-  researchInstructions String @default("Evaluate this business as a potential client for custom web development. Use only supplied evidence. Identify concrete business-impact problems, qualify conservatively, and choose one strong evidence-backed outreach angle. Technical performance data may support analysis but should not by itself qualify a lead.") @map("research_instructions") @db.Text
+  researchInstructions String @default("Evaluate the supplied website as an observable business asset for the business it represents. Assess performance effectiveness, demand alignment, business representation, customer-action capability, acquisition readiness, and site maturity. Determine whether the evidence supports a rebuild candidate, optimization candidate, no material opportunity, or needs review. Do not manufacture deficiencies or choose an outreach angle.") @map("research_instructions") @db.Text
   outreachInstructions String @default("Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.") @map("outreach_instructions") @db.Text
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
