@@ -244,7 +244,7 @@ export function applyCrawlerFailureSafety(
 
   if (website.finalUrl && !website.fetchError) return safeBase;
 
-  const providerAvailable = website.providerScrapeEvidence.succeeded && website.providerScrapeEvidence.wordCount >= 40;
+  const providerAvailable = Boolean(website.providerScrapeEvidence?.succeeded && website.providerScrapeEvidence.wordCount >= 40);
   const indexedAvailable = website.searchIndexEvidence.succeeded && website.searchIndexEvidence.pages.length >= 3;
   const materialPerformanceConstraint = hasMaterialPerformanceConstraint(performanceAssessment);
 
