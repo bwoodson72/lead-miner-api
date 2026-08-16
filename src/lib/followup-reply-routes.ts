@@ -9,6 +9,7 @@ import { estimateAiCost } from "./ai-cost.js";
 import { applyReplyAutomationStop, leadStatusForReply } from "./reply-state.js";
 import { withAiCapacity } from "./ai-capacity.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
+import { FOLLOW_UP_COUNT, TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber } from "./outreach-sequence.js";
 
 async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -22,11 +23,17 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
 
   const sent = lead.outreachMessages;
   if (!sent.length) throw new Error("No sent initial outreach exists");
-  const delays = Array.isArray(sequence.delaysDays) ? sequence.delaysDays : [];
   const followupsAlreadySent = sent.filter((m) => m.kind === "followup").length;
-  if (followupsAlreadySent >= delays.length || sent.length >= sequence.maxTouches) { await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } }); return null; }
+  if (followupsAlreadySent >= FOLLOW_UP_COUNT || sent.length >= TOTAL_OUTREACH_TOUCHES) {
+    await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } });
+    return null;
+  }
 
-  const sequenceNumber = sent.length + 1;
+  const sequenceNumber = Math.max(...sent.map((message) => message.sequenceNumber), 0) + 1;
+  if (sequenceNumber > TOTAL_OUTREACH_TOUCHES) {
+    await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } });
+    return null;
+  }
   const existing = await prisma.outreachMessage.findFirst({ where: { leadId, sequenceNumber, kind: "followup", status: { in: ["draft", "approved", "sending", "sent"] } } });
   if (existing) return existing;
 
@@ -35,9 +42,11 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   try {
     const generated = await withAiCapacity(prisma, () => generateFollowUp({ instructions: settings.followUpInstructions, sequenceNumber, businessName: lead.businessName, domain: lead.domain, researchSummary: lead.researchSummary, primaryOutreachAngle: lead.primaryOutreachAngle, problems: lead.problems, priorMessages: sent.map((m) => ({ kind: m.kind, sequenceNumber: m.sequenceNumber, subject: m.subject, bodyText: m.bodyText })) }, settings.outreachModel));
     const autoApprove = settings.approvalMode === "auto_safe" && generated.draft.confidence >= settings.minAutoApproveConfidence;
+    const followUpNumber = sequenceNumber - 1;
+    const breakup = isBreakupSequenceNumber(sequenceNumber);
     return prisma.$transaction(async (tx) => {
       const message = await tx.outreachMessage.create({ data: { leadId, kind: "followup", sequenceNumber, subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, status: autoApprove ? "approved" : "draft", approvedAt: autoApprove ? new Date() : null } });
-      await tx.activity.create({ data: { leadId, type: autoApprove ? "followup_auto_approved" : "followup_generated", summary: `${autoApprove ? "Auto-approved" : "Generated"} follow-up ${sequenceNumber - 1}`, metadata: { confidence: generated.draft.confidence, model: generated.model, sequenceId: sequence.id } } });
+      await tx.activity.create({ data: { leadId, type: autoApprove ? "followup_auto_approved" : "followup_generated", summary: `${autoApprove ? "Auto-approved" : "Generated"} follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`, metadata: { confidence: generated.draft.confidence, model: generated.model, sequenceId: sequence.id, followUpNumber, breakup } } });
       await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
       return message;
     });
@@ -93,7 +102,7 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
 
 export async function syncReplies(prisma: PrismaClient, limit = 50) {
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationReplySyncMax, SAFETY_LIMITS.automationReplySyncMax);
-  const leads = await prisma.lead.findMany({ where: { OR: [{ emailThreads: { some: { provider: "gmail" } } }, { outreachMessages: { some: { status: "sent", providerThreadId: { not: null } } } }], status: { in: ["contacted", "replied", "interested"] } }, orderBy: { lastOutreachDate: "desc" }, take: safeLimit, select: { id: true } });
+  const leads = await prisma.lead.findMany({ where: { OR: [{ emailThreads: { some: { provider: "gmail" } } }, { outreachMessages: { some: { status: "sent", providerThreadId: { not: null } } }], status: { in: ["contacted", "replied", "interested"] } }, orderBy: { lastOutreachDate: "desc" }, take: safeLimit, select: { id: true } });
   const results: Array<{ leadId: number; reply?: string; success: boolean; error?: string }> = [];
   for (const lead of leads) { try { const result = await syncLeadReply(prisma, lead.id); results.push({ leadId: lead.id, reply: result?.classification, success: true }); } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
   return results;
