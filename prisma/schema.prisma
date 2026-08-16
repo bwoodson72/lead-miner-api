@@ -100,8 +100,8 @@ model OutreachSequence {
   delaysDays Json @map("delays_days")
   maxTouches Int @map("max_touches")
   isActive Boolean @default(false) @map("is_active")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   @@index([isActive])
   @@map("outreach_sequences")
 }
@@ -115,8 +115,8 @@ model EmailThread {
   status String @default("open")
   lastOutboundAt DateTime? @map("last_outbound_at")
   lastInboundAt DateTime? @map("last_inbound_at")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, provider])
   @@index([status, lastInboundAt])
