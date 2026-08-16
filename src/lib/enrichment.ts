@@ -263,8 +263,7 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   const businessName = input.existingBusinessName || observedBusinessName;
   const domainIdentityMatches = domainsMatch(inputDomain, siteDomain);
   const businessIdentity = assessSiteBusinessIdentity(input.existingBusinessName, observedBusinessName);
-  const siteIdentityConflict = !domainIdentityMatches || businessIdentity === "conflict";
-  const siteContactDataTrusted = !siteIdentityConflict;
+  const siteContactDataTrusted = domainIdentityMatches && (!input.existingBusinessName || businessIdentity === "match");
 
   let email = siteContactDataTrusted ? pickBestEmail(extractEmails(homepage.html), inputDomain) : undefined;
   let phone = !input.existingPhone && siteContactDataTrusted ? pickBestPhone(extractPhones(homepage.html)) : undefined;
@@ -272,6 +271,7 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   notes.push(`Fetched ${url}`);
   if (!domainIdentityMatches) notes.push(`Rejected site-derived contacts: destination domain ${siteDomain} does not match source domain ${inputDomain}`);
   else if (businessIdentity === "conflict") notes.push(`Rejected site-derived contacts: site identity ${observedBusinessName ?? "unknown"} conflicts with source business ${input.existingBusinessName}`);
+  else if (input.existingBusinessName && businessIdentity !== "match") notes.push(`Rejected site-derived contacts: site identity could not be corroborated with source business ${input.existingBusinessName}`);
   else if (email) notes.push("Found email on identity-consistent homepage");
   if (input.existingPhone) notes.push("Preserved phone from discovery source; website phone cannot overwrite it");
 
