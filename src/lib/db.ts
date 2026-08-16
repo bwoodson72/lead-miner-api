@@ -89,17 +89,19 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
           } });
 
       if (lead.email) {
+        const source = lead.emailSource === "discovery" ? "discovery" : "enrichment";
         await tx.contact.upsert({
           where: { leadId_type_value: { leadId: saved.id, type: "email", value: lead.email.toLowerCase() } },
-          update: { isPrimary: true, source: "enrichment", verificationStatus: "discovered" },
-          create: { leadId: saved.id, type: "email", value: lead.email.toLowerCase(), isPrimary: true, source: "enrichment", verificationStatus: "discovered" },
+          update: { isPrimary: true, source, verificationStatus: "discovered" },
+          create: { leadId: saved.id, type: "email", value: lead.email.toLowerCase(), isPrimary: true, source, verificationStatus: "discovered" },
         });
       }
       if (lead.phone) {
+        const source = lead.phoneSource === "discovery" ? "discovery" : "enrichment";
         await tx.contact.upsert({
           where: { leadId_type_value: { leadId: saved.id, type: "phone", value: lead.phone } },
-          update: { isPrimary: true, source: "enrichment" },
-          create: { leadId: saved.id, type: "phone", value: lead.phone, isPrimary: true, source: "enrichment" },
+          update: { isPrimary: true, source },
+          create: { leadId: saved.id, type: "phone", value: lead.phone, isPrimary: true, source },
         });
       }
       return saved;
