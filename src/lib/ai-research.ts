@@ -2,7 +2,10 @@ import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
 import { RESEARCH_EVIDENCE_SOURCES } from "./research-evidence-safety.js";
-import { applyAssetFindingSafety } from "./asset-research-safety.js";
+import {
+  applyAssetFindingSafety,
+  isUnsupportedCrawlerReachabilityFinding,
+} from "./asset-research-safety.js";
 import { assessPerformance, type PerformanceAssessment } from "./performance-assessment.js";
 import {
   fetchBusinessAssetResearchPacket,
@@ -79,7 +82,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v6";
+export const RESEARCH_VERSION = "lead-research-v7";
 
 function dimensionJsonSchema() {
   return {
@@ -148,6 +151,8 @@ const HARD_RESEARCH_RULES = [
   "Use only supplied evidence. Never invent traffic, bounce rate, conversions, revenue, ad spend, customer behavior, budget, business plans, growth, rankings, security failures, maintainability costs, or functionality not established by the packet.",
   "Measured performance is pre-classified deterministically in performanceAssessment using Google ranges. Interpret its severity; do not redefine or recalculate the bands.",
   "A severe performance signal can materially constrain the website as an acquisition asset and may independently make rebuild consideration reasonable. Poor performance does not automatically require a rebuild when the rest of the asset appears substantial and capable.",
+  "A Lead Miner crawler fetch failure is only an inspection failure. It is never proof that normal visitors cannot reach the website. Never describe a website, homepage, page, or domain as down, offline, unreachable, unavailable, or inaccessible based on fetchError, a null finalUrl, siteCoverage, crawlerAccess, or enrichment notes. If the crawler cannot inspect the site, mark the affected capability dimensions unknown and use NEEDS_REVIEW rather than creating an objective reachability defect.",
+  "Enrichment notes describe Lead Miner's enrichment process and may contain historical crawler failures. They are not independent visitor-reachability evidence and must not override a successful current research fetch.",
   "Assess demand alignment semantically using the lead keyword and supplied website evidence. Exact keyword matching is not required.",
   "Assess business representation by how meaningfully the site explains the business and its apparent services. Do not require a particular number of pages or assume every service needs its own page.",
   "Assess customer-action capability from explicit phone, email, form, contact/request, quote, estimate, booking, scheduling, or other action paths. No particular contact method is required.",
@@ -165,6 +170,41 @@ const HARD_RESEARCH_RULES = [
   "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled page summaries and site_coverage for bounded crawl/sitemap evidence.",
   "Return only the required structured result.",
 ].join(" ");
+
+function applyCrawlerFailureSafety(result: ResearchResult, website: BusinessAssetResearchPacket): ResearchResult {
+  const findings = result.findings
+    .map(applyAssetFindingSafety)
+    .filter((finding) => !isUnsupportedCrawlerReachabilityFinding(finding));
+
+  if (website.finalUrl && !website.fetchError) {
+    return { ...result, findings };
+  }
+
+  const unknownDimension = (label: string) => ({
+    rating: "unknown" as const,
+    evidence: `Lead Miner's crawler could not inspect enough current website content to assess ${label} reliably. This is crawler uncertainty, not evidence that visitors cannot access the site.`,
+    evidenceSources: ["site_coverage"] as const,
+    confidence: 0.2,
+  });
+
+  return {
+    ...result,
+    decision: "needs_review",
+    assetStrength: "unknown",
+    dimensions: {
+      ...result.dimensions,
+      demandAlignment: unknownDimension("demand alignment"),
+      businessRepresentation: unknownDimension("business representation"),
+      customerActionCapability: unknownDimension("customer-action capability"),
+      acquisitionReadiness: unknownDimension("acquisition readiness"),
+      siteMaturity: unknownDimension("site maturity"),
+    },
+    findings,
+    researchSummary: "Lead Miner could not inspect enough current website content during this research run to assess the website as a whole. The measured performance evidence remains available, but the other business-asset dimensions require review. The crawler failure itself is not evidence that the website is unavailable to visitors.",
+    decisionReason: "Needs review because the current crawler could not gather enough website evidence for a reliable business-asset assessment. Do not treat the crawler failure as a website outage.",
+    confidence: Math.min(result.confidence, 0.35),
+  };
+}
 
 export async function researchLead(
   lead: ResearchLead,
@@ -208,10 +248,10 @@ export async function researchLead(
   if (!raw) throw new Error("OpenAI returned no structured research output");
 
   const parsed = ResearchResultSchema.parse(JSON.parse(raw));
-  const findings = parsed.findings.map(applyAssetFindingSafety);
+  const result = applyCrawlerFailureSafety(parsed, website);
 
   return {
-    result: { ...parsed, findings },
+    result,
     performanceAssessment,
     website,
     model: data.model ?? model,
