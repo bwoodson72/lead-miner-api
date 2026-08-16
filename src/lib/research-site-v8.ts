@@ -5,6 +5,7 @@ import {
   type WebsiteResearchPacket,
 } from "./research-site.js";
 import { fetchSearchIndexEvidence, type SearchIndexEvidence } from "./research-index-fallback.js";
+import { fetchWithTlsIssuerRecovery } from "./tls-issuer-recovery.js";
 
 export type RepresentativePageType = "service" | "location" | "about" | "other";
 
@@ -142,7 +143,7 @@ async function fetchTextDetailed(url: string, timeoutMs = 8_000): Promise<FetchT
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, redirect: "follow", headers: browserHeaders() });
+    const response = await fetchWithTlsIssuerRecovery(url, { signal: controller.signal, redirect: "follow", headers: browserHeaders() });
     const attempt: CrawlerAttempt = {
       url,
       status: response.status,
