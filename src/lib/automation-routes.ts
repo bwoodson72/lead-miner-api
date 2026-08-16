@@ -11,7 +11,7 @@ import { SAFETY_LIMITS } from "./safety-limits.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
 
-const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8"];
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9"];
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   registerResearchMaintenanceRoutes(app, prisma);
@@ -125,9 +125,6 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
       const researchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax);
       const research = settings.autoResearch ? await processResearchReadyLeads(prisma, researchLimit) : [];
 
-      // These three paths can transmit email. Keep them behind a second,
-      // independent production switch so research automation can be exercised
-      // without accidentally sending anything.
       const reconciled = policy.sendAutomationEnabled
         ? await reconcileStaleSends(prisma, SAFETY_LIMITS.automationStaleSendMax)
         : [];
