@@ -5,12 +5,15 @@ import { reconcileStaleSends, sendApprovedQueue } from "./outreach-sending.js";
 import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
 import { processQualifiedOutreachPreparation } from "./outreach-preparation-job.js";
+import { prioritizeLead } from "./outreach-preparation.js";
 import { SAFETY_LIMITS } from "./safety-limits.js";
 
 export const AUTOMATION_JOB_NAMES = [
   "sync_replies",
+  "revisit_due",
   "enrich",
   "research",
+  "recalculate_priorities",
   "prepare_outreach",
   "reconcile_sends",
   "followups",
@@ -28,6 +31,41 @@ function summarizeResults(results: Array<any>) {
   };
 }
 
+async function processDueRevisits(prisma: PrismaClient, limit = 50) {
+  const due = await prisma.lead.findMany({
+    where: { replyStatus: "not_now", revisitAt: { lte: new Date() } },
+    orderBy: { revisitAt: "asc" },
+    take: limit,
+    select: { id: true, revisitAt: true },
+  });
+  const results: Array<{ leadId:number; success:boolean; error?:string }> = [];
+  for (const lead of due) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.lead.update({ where: { id: lead.id }, data: { status: "replied", replyHandledAt: null, revisitAt: null } });
+        await tx.activity.create({ data: { leadId: lead.id, type: "revisit_due", summary: "Not-now prospect is due for operator review", metadata: { scheduledFor: lead.revisitAt?.toISOString() ?? null } } });
+      });
+      results.push({ leadId: lead.id, success: true });
+    } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  return results;
+}
+
+async function recalculatePriorities(prisma: PrismaClient, limit = 100) {
+  const leads = await prisma.lead.findMany({
+    where: { email: { not: null }, qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, assetAssessments: { some: {} } },
+    orderBy: { updatedAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  const results: Array<{ leadId:number; success:boolean; priorityScore?:number; error?:string }> = [];
+  for (const lead of leads) {
+    try { const priority = await prioritizeLead(prisma, lead.id); results.push({ leadId: lead.id, success: true, priorityScore: priority.score }); }
+    catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  return results;
+}
+
 export async function runNamedAutomationJob(prisma: PrismaClient, jobName: AutomationJobName) {
   const run = await prisma.automationRun.create({ data: { jobName, status: "running" } });
   const started = Date.now();
@@ -40,6 +78,9 @@ export async function runNamedAutomationJob(prisma: PrismaClient, jobName: Autom
         if (!settings.autoSyncReplies) skippedReason = "Reply sync is disabled";
         else results = await syncReplies(prisma, SAFETY_LIMITS.automationReplySyncMax);
         break;
+      case "revisit_due":
+        results = await processDueRevisits(prisma, SAFETY_LIMITS.automationReplySyncMax);
+        break;
       case "enrich":
         if (!settings.autoEnrich) skippedReason = "Automatic enrichment is disabled";
         else results = await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax);
@@ -47,6 +88,10 @@ export async function runNamedAutomationJob(prisma: PrismaClient, jobName: Autom
       case "research":
         if (!settings.autoResearch) skippedReason = "Automatic research is disabled";
         else results = await processResearchReadyLeads(prisma, Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax));
+        break;
+      case "recalculate_priorities":
+        if (!settings.autoPrioritize) skippedReason = "Automatic prioritization is disabled";
+        else results = await recalculatePriorities(prisma, 100);
         break;
       case "prepare_outreach":
         if (!settings.autoPrioritize) skippedReason = "Automatic prioritization is disabled";
