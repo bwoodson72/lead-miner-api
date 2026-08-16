@@ -1,32 +1,78 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculatePriority, ResearchResultSchema } from "../src/lib/ai-research.js";
+import { ResearchResultSchema } from "../src/lib/ai-research.js";
 
-test("calculatePriority applies the configured weighted score", () => {
-  const score = calculatePriority({
-    businessFit: 8,
-    websiteNeed: 10,
-    abilityToPay: 6,
-    contactability: 8,
-    urgency: 5,
-    salesOpportunity: 9,
+const validDimension = {
+  rating: "adequate",
+  evidence: "Supported by supplied evidence",
+  evidenceSources: ["lead_data"],
+  confidence: 0.8,
+};
+
+test("v6 research contract accepts business asset assessment output", () => {
+  const parsed = ResearchResultSchema.safeParse({
+    decision: "rebuild_candidate",
+    assetStrength: "constrained",
+    dimensions: {
+      performanceEffectiveness: { ...validDimension, rating: "weak", evidenceSources: ["performance"] },
+      demandAlignment: validDimension,
+      businessRepresentation: validDimension,
+      customerActionCapability: validDimension,
+      acquisitionReadiness: validDimension,
+      siteMaturity: validDimension,
+    },
+    findings: [{
+      category: "performance",
+      title: "Severe mobile performance constraint",
+      evidence: "Deterministic performance assessment is poor",
+      assetCapability: "Reduces the site's effectiveness as a destination for acquired traffic",
+      confidence: 0.95,
+      significance: "high",
+      evidenceSources: ["performance"],
+    }],
+    researchSummary: "The site has meaningful capability but severe delivery constraints.",
+    decisionReason: "Performance and other observable constraints make rebuild consideration reasonable.",
+    confidence: 0.9,
   });
-  assert.equal(score, 81);
+  assert.equal(parsed.success, true);
 });
 
-test("calculatePriority stays within the 0-100 range for valid score inputs", () => {
-  assert.equal(calculatePriority({ businessFit: 0, websiteNeed: 0, abilityToPay: 0, contactability: 0, urgency: 0, salesOpportunity: 0 }), 0);
-  assert.equal(calculatePriority({ businessFit: 10, websiteNeed: 10, abilityToPay: 10, contactability: 10, urgency: 10, salesOpportunity: 10 }), 100);
-});
-
-test("research contract rejects invented score ranges and invalid outreach values", () => {
+test("v6 research contract rejects legacy sales scoring and outreach fields", () => {
   const parsed = ResearchResultSchema.safeParse({
     decision: "qualified",
-    scores: { businessFit: 11, websiteNeed: 8, abilityToPay: 8, contactability: 8, urgency: 8, salesOpportunity: 8 },
-    problems: [{ category: "conversion", title: "Weak CTA", evidence: "Homepage", businessConsequence: "Fewer leads", recommendedImprovement: "Improve CTA", confidence: 0.9, outreachValue: "critical" }],
+    scores: { businessFit: 10, websiteNeed: 10, abilityToPay: 10, contactability: 10, urgency: 10, salesOpportunity: 10 },
+    problems: [],
     researchSummary: "Summary",
     primaryOutreachAngle: "CTA",
     qualificationReason: "Reason",
+    confidence: 0.9,
+  });
+  assert.equal(parsed.success, false);
+});
+
+test("v6 research contract rejects invalid asset ratings and significance", () => {
+  const parsed = ResearchResultSchema.safeParse({
+    decision: "rebuild_candidate",
+    assetStrength: "excellent",
+    dimensions: {
+      performanceEffectiveness: validDimension,
+      demandAlignment: validDimension,
+      businessRepresentation: validDimension,
+      customerActionCapability: validDimension,
+      acquisitionReadiness: validDimension,
+      siteMaturity: validDimension,
+    },
+    findings: [{
+      category: "performance",
+      title: "Finding",
+      evidence: "Evidence",
+      assetCapability: "Capability",
+      confidence: 0.8,
+      significance: "critical",
+      evidenceSources: ["performance"],
+    }],
+    researchSummary: "Summary",
+    decisionReason: "Reason",
     confidence: 0.9,
   });
   assert.equal(parsed.success, false);
