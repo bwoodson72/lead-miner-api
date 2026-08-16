@@ -130,7 +130,7 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
 export async function reconcileStaleSends(
   prisma: PrismaClient,
   limit = 10,
-  resendClaimed: (prisma: PrismaClient, messageId: number) => Promise<unknown> = sendClaimedMessage,
+  retryClaimed: (prisma: PrismaClient, messageId: number) => Promise<unknown> = sendClaimedMessage,
 ) {
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationStaleSendMax, SAFETY_LIMITS.automationStaleSendMax);
   const cutoff = new Date(Date.now() - STALE_SEND_MS);
@@ -142,7 +142,7 @@ export async function reconcileStaleSends(
     if (!lease) { results.push({ messageId: message.id, success: false, error: "Send lock busy" }); break; }
     try {
       await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendAttemptedAt: new Date() } });
-      await resendClaimed(prisma, message.id);
+      await retryClaimed(prisma, message.id);
       results.push({ messageId: message.id, success: true });
     } catch (error) {
       results.push({ messageId: message.id, success: false, error: error instanceof Error ? error.message : String(error) });
