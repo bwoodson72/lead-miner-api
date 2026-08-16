@@ -34,7 +34,12 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number) {
     if (!slot) throw new Error(`Email enrichment concurrency limit reached (${SAFETY_LIMITS.emailEnrichmentConcurrency})`);
 
     try {
-      const enrichment = await enrichLeadFromSite({ url: lead.landingPageUrl, existingBusinessName: lead.businessName ?? undefined });
+      const enrichment = await enrichLeadFromSite({
+        url: lead.landingPageUrl,
+        existingBusinessName: lead.businessName ?? undefined,
+        existingPhone: lead.phone ?? undefined,
+        existingAddress: lead.address ?? undefined,
+      });
       const email = enrichment.email?.toLowerCase() ?? null;
       const state = email
         ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_discovered" }
