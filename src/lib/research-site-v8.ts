@@ -113,6 +113,31 @@ type FetchTextResult = {
   attempt: CrawlerAttempt;
 };
 
+function fetchErrorDetails(error: unknown): string {
+  if (error instanceof Error && error.name === "AbortError") return "Timeout";
+
+  const details: string[] = [];
+  if (error instanceof Error && error.message) details.push(error.message);
+  else if (error != null) details.push(String(error));
+
+  let cause = (error as { cause?: unknown } | null)?.cause;
+  let depth = 0;
+  while (cause && depth < 3) {
+    const row = cause as { code?: unknown; message?: unknown; address?: unknown; port?: unknown; cause?: unknown };
+    const parts: string[] = [];
+    if (typeof row.code === "string") parts.push(row.code);
+    if (typeof row.message === "string" && !details.includes(row.message)) parts.push(row.message);
+    if (typeof row.address === "string") {
+      parts.push(typeof row.port === "number" ? `${row.address}:${row.port}` : row.address);
+    }
+    if (parts.length) details.push(`cause: ${parts.join(" · ")}`);
+    cause = row.cause;
+    depth += 1;
+  }
+
+  return details.filter(Boolean).join(" | ") || "Unknown fetch error";
+}
+
 async function fetchTextDetailed(url: string, timeoutMs = 8_000): Promise<FetchTextResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -124,13 +149,17 @@ async function fetchTextDetailed(url: string, timeoutMs = 8_000): Promise<FetchT
       finalUrl: response.url || url,
       error: response.ok ? null : `HTTP ${response.status}`,
     };
-    if (!response.ok) return { response: null, attempt };
+    if (!response.ok) {
+      console.warn(`[Research crawl] ${url} returned HTTP ${response.status}${response.url ? ` -> ${response.url}` : ""}`);
+      return { response: null, attempt };
+    }
     return { response: { status: response.status, finalUrl: response.url || url, text: await response.text() }, attempt };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = fetchErrorDetails(error);
+    console.warn(`[Research crawl] ${url} failed: ${message}`);
     return {
       response: null,
-      attempt: { url, status: null, finalUrl: null, error: error instanceof Error && error.name === "AbortError" ? "Timeout" : message },
+      attempt: { url, status: null, finalUrl: null, error: message },
     };
   } finally {
     clearTimeout(timeout);
