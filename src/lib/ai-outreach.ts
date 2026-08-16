@@ -60,19 +60,30 @@ const HARD_OUTREACH_RULES = [
   "Return only the required structured draft.",
 ].join(" ");
 
+type LegacyProblem = { title: string; evidence: string; businessConsequence: string; confidence: number; outreachValue: string };
+type SelectedFinding = { id: number; category: string; title: string; evidence: string; assetCapability: string; confidence: number; significance: string };
+
 export async function generateOutreachDraft(input: {
   businessName: string | null;
   domain: string;
   keyword: string;
-  primaryOutreachAngle: string;
+  primaryOutreachAngle: string | null;
   researchSummary: string | null;
   qualificationReason: string | null;
-  selectedFinding: { id: number; category: string; title: string; evidence: string; assetCapability: string; confidence: number; significance: string };
+  selectedFinding?: SelectedFinding;
+  problems?: LegacyProblem[];
 }, model: string, minFindingConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; cachedTokens?: number; outputTokens?: number }> {
-  if (input.selectedFinding.confidence < minFindingConfidence) throw new Error("Selected outreach finding is below the configured confidence threshold");
-  if (containsUnsupportedFormAbsenceClaim(`${input.selectedFinding.title} ${input.selectedFinding.evidence} ${input.selectedFinding.assetCapability}`)) {
-    throw new Error("Selected outreach finding contains an unsupported form-absence claim");
+  let selectedFinding = input.selectedFinding;
+  if (!selectedFinding) {
+    const legacy = (input.problems ?? [])
+      .filter((problem) => !containsUnsupportedFormAbsenceClaim(`${problem.title} ${problem.evidence} ${problem.businessConsequence}`))
+      .filter((problem) => problem.confidence >= minFindingConfidence && problem.outreachValue !== "low")
+      .sort((a, b) => b.confidence - a.confidence)[0];
+    if (legacy) selectedFinding = { id: 1, category: "legacy_problem", title: legacy.title, evidence: legacy.evidence, assetCapability: legacy.businessConsequence, confidence: legacy.confidence, significance: legacy.outreachValue === "high" ? "high" : "medium" };
   }
+  if (!selectedFinding) throw new Error("No evidence-backed outreach finding meets the configured safety threshold");
+  if (selectedFinding.confidence < minFindingConfidence) throw new Error("Selected outreach finding is below the configured confidence threshold");
+  if (containsUnsupportedFormAbsenceClaim(`${selectedFinding.title} ${selectedFinding.evidence} ${selectedFinding.assetCapability}`)) throw new Error("Selected outreach finding contains an unsupported form-absence claim");
 
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
@@ -80,15 +91,15 @@ export async function generateOutreachDraft(input: {
     businessName: input.businessName,
     domain: input.domain,
     keyword: input.keyword,
-    selectedOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle),
+    selectedOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle) ?? sanitizeProspectFacingEvidence(selectedFinding.title),
     selectedFinding: {
-      id: input.selectedFinding.id,
-      category: input.selectedFinding.category,
-      title: sanitizeProspectFacingEvidence(input.selectedFinding.title),
-      evidence: sanitizeProspectFacingEvidence(input.selectedFinding.evidence),
-      businessImpact: sanitizeProspectFacingEvidence(input.selectedFinding.assetCapability),
-      confidence: input.selectedFinding.confidence,
-      significance: input.selectedFinding.significance,
+      id: selectedFinding.id,
+      category: selectedFinding.category,
+      title: sanitizeProspectFacingEvidence(selectedFinding.title),
+      evidence: sanitizeProspectFacingEvidence(selectedFinding.evidence),
+      businessImpact: sanitizeProspectFacingEvidence(selectedFinding.assetCapability),
+      confidence: selectedFinding.confidence,
+      significance: selectedFinding.significance,
     },
   };
 
