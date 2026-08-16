@@ -7,6 +7,7 @@ export const RESEARCH_EVIDENCE_SOURCES = [
   "architecture",
   "site_coverage",
   "representative_page",
+  "provider_scrape",
   "search_index",
   "technology",
   "performance",
