@@ -1,39 +1,59 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
+import { RESEARCH_EVIDENCE_SOURCES } from "./research-evidence-safety.js";
+import { applyAssetFindingSafety } from "./asset-research-safety.js";
+import { assessPerformance, type PerformanceAssessment } from "./performance-assessment.js";
 import {
-  applyResearchEvidenceSafety,
-  RESEARCH_EVIDENCE_SOURCES,
-  sanitizePrimaryOutreachAngle,
-} from "./research-evidence-safety.js";
-import { fetchWebsiteResearchPacket } from "./research-site.js";
+  fetchBusinessAssetResearchPacket,
+  type BusinessAssetResearchPacket,
+} from "./research-site-v6.js";
+
 export type { WebsiteResearchPacket } from "./research-site.js";
+export type { BusinessAssetResearchPacket } from "./research-site-v6.js";
 
 const EvidenceSourceSchema = z.enum(RESEARCH_EVIDENCE_SOURCES);
+const RatingSchema = z.enum(["strong", "adequate", "constrained", "weak", "unknown"]);
+const DecisionSchema = z.enum(["rebuild_candidate", "optimization_candidate", "no_material_opportunity", "needs_review"]);
+const FindingCategorySchema = z.enum([
+  "performance",
+  "demand_alignment",
+  "business_representation",
+  "customer_action",
+  "acquisition_readiness",
+  "site_maturity",
+  "objective_defect",
+]);
+
+const DimensionSchema = z.object({
+  rating: RatingSchema,
+  evidence: z.string().min(1),
+  evidenceSources: z.array(EvidenceSourceSchema).min(1),
+  confidence: z.number().min(0).max(1),
+});
 
 export const ResearchResultSchema = z.object({
-  decision: z.enum(["qualified", "disqualified", "needs_review"]),
-  scores: z.object({
-    businessFit: z.number().int().min(0).max(10),
-    websiteNeed: z.number().int().min(0).max(10),
-    abilityToPay: z.number().int().min(0).max(10),
-    contactability: z.number().int().min(0).max(10),
-    urgency: z.number().int().min(0).max(10),
-    salesOpportunity: z.number().int().min(0).max(10),
+  decision: DecisionSchema,
+  assetStrength: RatingSchema,
+  dimensions: z.object({
+    performanceEffectiveness: DimensionSchema,
+    demandAlignment: DimensionSchema,
+    businessRepresentation: DimensionSchema,
+    customerActionCapability: DimensionSchema,
+    acquisitionReadiness: DimensionSchema,
+    siteMaturity: DimensionSchema,
   }),
-  problems: z.array(z.object({
-    category: z.string().min(1),
+  findings: z.array(z.object({
+    category: FindingCategorySchema,
     title: z.string().min(1),
     evidence: z.string().min(1),
-    businessConsequence: z.string().min(1),
-    recommendedImprovement: z.string().optional().default(""),
+    assetCapability: z.string().min(1),
     confidence: z.number().min(0).max(1),
-    outreachValue: z.enum(["low", "medium", "high"]),
+    significance: z.enum(["low", "medium", "high"]),
     evidenceSources: z.array(EvidenceSourceSchema).min(1),
   })).max(8),
   researchSummary: z.string().min(1),
-  primaryOutreachAngle: z.string().nullable(),
-  qualificationReason: z.string().min(1),
+  decisionReason: z.string().min(1),
   confidence: z.number().min(0).max(1),
 });
 
@@ -59,72 +79,90 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v5";
+export const RESEARCH_VERSION = "lead-research-v6";
 
-export function calculatePriority(scores: ResearchResult["scores"]): number {
-  return Math.round((
-    scores.businessFit * .20 +
-    scores.websiteNeed * .25 +
-    scores.abilityToPay * .15 +
-    scores.contactability * .15 +
-    scores.urgency * .10 +
-    scores.salesOpportunity * .15
-  ) * 10);
+function dimensionJsonSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["rating", "evidence", "evidenceSources", "confidence"],
+    properties: {
+      rating: { type: "string", enum: ["strong", "adequate", "constrained", "weak", "unknown"] },
+      evidence: { type: "string" },
+      evidenceSources: { type: "array", minItems: 1, items: { type: "string", enum: [...RESEARCH_EVIDENCE_SOURCES] } },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+    },
+  };
 }
 
 function jsonSchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["decision", "scores", "problems", "researchSummary", "primaryOutreachAngle", "qualificationReason", "confidence"],
+    required: ["decision", "assetStrength", "dimensions", "findings", "researchSummary", "decisionReason", "confidence"],
     properties: {
-      decision: { type: "string", enum: ["qualified", "disqualified", "needs_review"] },
-      scores: {
+      decision: { type: "string", enum: ["rebuild_candidate", "optimization_candidate", "no_material_opportunity", "needs_review"] },
+      assetStrength: { type: "string", enum: ["strong", "adequate", "constrained", "weak", "unknown"] },
+      dimensions: {
         type: "object",
         additionalProperties: false,
-        required: ["businessFit", "websiteNeed", "abilityToPay", "contactability", "urgency", "salesOpportunity"],
-        properties: Object.fromEntries(["businessFit", "websiteNeed", "abilityToPay", "contactability", "urgency", "salesOpportunity"].map((k) => [k, { type: "integer", minimum: 0, maximum: 10 }])),
+        required: ["performanceEffectiveness", "demandAlignment", "businessRepresentation", "customerActionCapability", "acquisitionReadiness", "siteMaturity"],
+        properties: {
+          performanceEffectiveness: dimensionJsonSchema(),
+          demandAlignment: dimensionJsonSchema(),
+          businessRepresentation: dimensionJsonSchema(),
+          customerActionCapability: dimensionJsonSchema(),
+          acquisitionReadiness: dimensionJsonSchema(),
+          siteMaturity: dimensionJsonSchema(),
+        },
       },
-      problems: {
+      findings: {
         type: "array",
         maxItems: 8,
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["category", "title", "evidence", "businessConsequence", "recommendedImprovement", "confidence", "outreachValue", "evidenceSources"],
+          required: ["category", "title", "evidence", "assetCapability", "confidence", "significance", "evidenceSources"],
           properties: {
-            category: { type: "string" },
+            category: { type: "string", enum: ["performance", "demand_alignment", "business_representation", "customer_action", "acquisition_readiness", "site_maturity", "objective_defect"] },
             title: { type: "string" },
             evidence: { type: "string" },
-            businessConsequence: { type: "string" },
-            recommendedImprovement: { type: "string" },
+            assetCapability: { type: "string" },
             confidence: { type: "number", minimum: 0, maximum: 1 },
-            outreachValue: { type: "string", enum: ["low", "medium", "high"] },
+            significance: { type: "string", enum: ["low", "medium", "high"] },
             evidenceSources: { type: "array", minItems: 1, items: { type: "string", enum: [...RESEARCH_EVIDENCE_SOURCES] } },
           },
         },
       },
       researchSummary: { type: "string" },
-      primaryOutreachAngle: { type: ["string", "null"] },
-      qualificationReason: { type: "string" },
+      decisionReason: { type: "string" },
       confidence: { type: "number", minimum: 0, maximum: 1 },
     },
   };
 }
 
 const HARD_RESEARCH_RULES = [
-  "Use only supplied evidence. Never invent a website problem or business fact.",
-  "Every problem must list the exact evidenceSources used. Use dom_heading for headings and dom_text for pageText.",
-  "The website packet is produced from static HTML, not a rendered browser. Even after obvious hidden elements are filtered, dom_heading and dom_text may contain CSS-hidden, off-canvas, responsive-hidden, slider-clone, or abandoned template-builder content.",
-  "The crawler follows up to four discovered contact, quote, estimate, inspection, request, booking, scheduling, or appointment pages and aggregates those checks into contactSignals.checkedContactPages.",
-  "contactSignals.hasForm and formCount are aggregated across the landing page and successfully fetched contact/request pages. If hasForm is true, never claim that the site or contact flow lacks a form.",
-  "Even when contactSignals.hasForm is false, static HTML can miss JavaScript-rendered forms. Do not use a missing-form claim as a prospect-facing outreach problem.",
-  "Never say or imply that visitors can see content when the claim is supported only by dom_heading or dom_text.",
-  "Never make leftover-template, unrelated-industry-content, placeholder-content, wrong-company-content, or similar credibility claims high-confidence/high-outreach when supported only by dom_heading/dom_text. Such a finding needs corroboration from a visitor-facing signal such as navigation, CTA, title/meta, or another deterministic source; otherwise treat it only as a low-confidence diagnostic clue.",
-  "A high-confidence or high-outreach problem must have at least one evidence source other than dom_heading/dom_text.",
-  "Treat deterministic fields such as navigation, calls to action, contact signals, architecture, technologies, and measured performance as evidence, not assumptions.",
-  "Absence from the packet is not proof that something does not exist unless the packet explicitly establishes that absence.",
-  "Scores are 0-10. Obvious national chains, agency-managed sites, non-businesses, and prospects with no meaningful web opportunity should not be qualified merely to fill the pipeline.",
+  "Treat the website as an observable business asset, not as a checklist of broken features.",
+  "The central question is whether the supplied evidence shows a sufficiently capable customer-acquisition and business-development asset for the business represented, or a meaningful enough capability gap that a rebuild is reasonable.",
+  "This is not a general website audit. Do not try to maximize the number of findings. Include only material capabilities or limitations that affect the final assessment.",
+  "Use only supplied evidence. Never invent traffic, bounce rate, conversions, revenue, ad spend, customer behavior, budget, business plans, growth, rankings, security failures, maintainability costs, or functionality not established by the packet.",
+  "Measured performance is pre-classified deterministically in performanceAssessment using Google ranges. Interpret its severity; do not redefine or recalculate the bands.",
+  "A severe performance signal can materially constrain the website as an acquisition asset and may independently make rebuild consideration reasonable. Poor performance does not automatically require a rebuild when the rest of the asset appears substantial and capable.",
+  "Assess demand alignment semantically using the lead keyword and supplied website evidence. Exact keyword matching is not required.",
+  "Assess business representation by how meaningfully the site explains the business and its apparent services. Do not require a particular number of pages or assume every service needs its own page.",
+  "Assess customer-action capability from explicit phone, email, form, contact/request, quote, estimate, booking, scheduling, or other action paths. No particular contact method is required.",
+  "If contactSignals.hasForm is true, never claim that the site or contact flow lacks a form. If it is false, static HTML may still miss JavaScript-rendered forms, so do not make a site-wide missing-form claim.",
+  "siteCoverage and representativePages improve architecture evidence but are still a bounded sample. architectureEvidenceComplete is false by design. Never treat absence from the packet as proof of site-wide absence.",
+  "Never say visitors can see content supported only by dom_heading or dom_text. Static HTML can contain hidden, off-canvas, responsive-hidden, slider-clone, or stale template DOM.",
+  "Wrong-company, unrelated-industry, placeholder, or template contamination findings require visitor-facing corroboration such as title, navigation, CTA, destination domain behavior, or representative-page evidence before they can be high confidence or high significance.",
+  "Paid advertising is acquisition context, not a defect or rebuild reason. If adSource indicates paid traffic, use it only to judge whether the observed asset appears adequately equipped to receive traffic being actively acquired. Never invent spend or waste amounts.",
+  "Do not penalize a site merely for lacking a blog, FAQs, testimonials, live chat, online booking, displayed pricing, location pages, individual service pages, schema markup, or a specific CTA type.",
+  "Do not use aesthetic preference, 'dated' appearance by itself, generic modernization, CRO ideas, or optional best practices as rebuild qualification.",
+  "Several meaningful limitations may combine into a substantial business-asset gap even when nothing is technically broken.",
+  "REBUILD_CANDIDATE means the observable capability gap is substantial enough that a new implementation is a reasonable option. OPTIMIZATION_CANDIDATE means the asset appears fundamentally capable but has material fixable limitations that do not clearly justify replacement. NO_MATERIAL_OPPORTUNITY means the supplied evidence does not show a meaningful enough gap to pursue a rebuild. NEEDS_REVIEW means the evidence is too incomplete or conflicting to choose safely.",
+  "Identify both the strongest capabilities and the most important limitations in the research summary. Distinguish isolated weaknesses from cumulative asset inadequacy.",
+  "Research does not choose an outreach angle, estimate ability to pay, assign sales urgency, or recommend messaging. Those belong to later pipeline stages.",
+  "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled page summaries and site_coverage for bounded crawl/sitemap evidence.",
   "Return only the required structured result.",
 ].join(" ");
 
@@ -132,12 +170,20 @@ export async function researchLead(
   lead: ResearchLead,
   model: string,
   editableInstructions: string,
-): Promise<{ result: ResearchResult; model: string; inputTokens?: number; outputTokens?: number }> {
+): Promise<{
+  result: ResearchResult;
+  performanceAssessment: PerformanceAssessment;
+  website: BusinessAssetResearchPacket;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}> {
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
 
-  const website = await fetchWebsiteResearchPacket(lead.landingPageUrl);
-  const evidence = { lead, website };
+  const performanceAssessment = assessPerformance(lead);
+  const website = await fetchBusinessAssetResearchPacket(lead.landingPageUrl);
+  const evidence = { lead, performanceAssessment, website };
   const systemInstructions = `${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_RESEARCH_RULES}`;
   const response = await fetchWithProviderBackoff(
     "https://api.openai.com/v1/responses",
@@ -148,25 +194,26 @@ export async function researchLead(
         model,
         input: [
           { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
-          { role: "user", content: [{ type: "input_text", text: `Analyze this Lead Miner evidence packet:\n${JSON.stringify(evidence)}` }] },
+          { role: "user", content: [{ type: "input_text", text: `Assess this Lead Miner evidence packet as a business asset:\n${JSON.stringify(evidence)}` }] },
         ],
-        text: { format: { type: "json_schema", name: "lead_research", strict: true, schema: jsonSchema() } },
+        text: { format: { type: "json_schema", name: "business_asset_research", strict: true, schema: jsonSchema() } },
       }),
     },
-    "OpenAI research",
+    "OpenAI business asset research",
   );
 
   if (!response.ok) throw new Error(`OpenAI research failed (${response.status}): ${await response.text()}`);
   const data = await response.json() as any;
-  const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
+  const raw = data.output_text ?? data.output?.flatMap((output: any) => output.content ?? []).find((content: any) => content.type === "output_text")?.text;
   if (!raw) throw new Error("OpenAI returned no structured research output");
 
   const parsed = ResearchResultSchema.parse(JSON.parse(raw));
-  const problems = parsed.problems.map(applyResearchEvidenceSafety);
-  const primaryOutreachAngle = sanitizePrimaryOutreachAngle(parsed.primaryOutreachAngle, problems);
+  const findings = parsed.findings.map(applyAssetFindingSafety);
 
   return {
-    result: { ...parsed, problems, primaryOutreachAngle },
+    result: { ...parsed, findings },
+    performanceAssessment,
+    website,
     model: data.model ?? model,
     inputTokens: data.usage?.input_tokens,
     outputTokens: data.usage?.output_tokens,
