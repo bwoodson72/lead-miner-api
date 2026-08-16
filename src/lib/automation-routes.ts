@@ -11,7 +11,7 @@ import { SAFETY_LIMITS } from "./safety-limits.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
 
-const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7"];
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8"];
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   registerResearchMaintenanceRoutes(app, prisma);
