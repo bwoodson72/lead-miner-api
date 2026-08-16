@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { calculatePriority, researchLead, RESEARCH_VERSION } from "./ai-research.js";
+import { researchLead, RESEARCH_VERSION } from "./ai-research.js";
 import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js";
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
@@ -66,6 +66,12 @@ async function invalidateUnsentInitialOutreach(prisma: PrismaClient, leadId: num
   return cancelled.count;
 }
 
+function lifecycleStatusForDecision(decision: string, currentStatus: string) {
+  if (decision === "rebuild_candidate" || decision === "optimization_candidate") return "qualified";
+  if (decision === "no_material_opportunity") return "disqualified";
+  return currentStatus;
+}
+
 export async function processLeadResearch(prisma: PrismaClient, leadId: number) {
   const lease = await acquireAutomationLease(prisma, `lead-research-${leadId}`, 10 * 60_000);
   if (!lease) throw new Error("Lead research is already running");
@@ -76,28 +82,92 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
     const settings = await getAppSettings(prisma);
     const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
     try {
-      const { result, model, inputTokens, outputTokens } = await withAiCapacity(prisma, () => researchLead(lead, settings.researchModel, settings.researchInstructions));
-      const priorityScore = calculatePriority(result.scores);
-      const nextStatus = result.decision === "qualified" ? "qualified" : result.decision === "disqualified" ? "disqualified" : lead.status;
+      const { result, performanceAssessment, website, model, inputTokens, outputTokens } = await withAiCapacity(prisma, () => researchLead(lead, settings.researchModel, settings.researchInstructions));
+      const nextStatus = lifecycleStatusForDecision(result.decision, lead.status);
+      let assessmentId: number | null = null;
+
       await prisma.$transaction(async (tx) => {
+        // v6 findings are first-class business-asset evidence. Remove the old v5
+        // problem snapshot so the UI cannot present stale audit-style findings as current.
         await tx.leadProblem.deleteMany({ where: { leadId } });
-        if (result.problems.length) await tx.leadProblem.createMany({ data: result.problems.map((p) => ({ leadId, category: p.category, title: p.title, evidence: p.evidence, businessConsequence: p.businessConsequence, recommendedImprovement: p.recommendedImprovement || null, confidence: p.confidence, outreachValue: p.outreachValue })) });
-        await tx.leadScore.create({ data: { leadId, ...result.scores, compositeScore: priorityScore, model, researchVersion: RESEARCH_VERSION } });
-        await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.qualificationReason, priorityScore, primaryOutreachAngle: result.primaryOutreachAngle, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date() } });
-        await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.qualificationReason}`, metadata: { priorityScore, confidence: result.confidence, model, preparationStatus: preparation.status, enrichmentAttempted: preparation.enrichmentAttempted } } });
+
+        const assessment = await tx.leadAssetAssessment.create({
+          data: {
+            leadId,
+            decision: result.decision,
+            assetStrength: result.assetStrength,
+            dimensions: result.dimensions,
+            performanceAssessment,
+            siteCoverage: website.siteCoverage,
+            researchSummary: result.researchSummary,
+            decisionReason: result.decisionReason,
+            confidence: result.confidence,
+            model,
+            researchVersion: RESEARCH_VERSION,
+          },
+        });
+        assessmentId = assessment.id;
+
+        if (result.findings.length) {
+          await tx.leadFinding.createMany({
+            data: result.findings.map((finding) => ({
+              assessmentId: assessment.id,
+              category: finding.category,
+              title: finding.title,
+              evidence: finding.evidence,
+              assetCapability: finding.assetCapability,
+              confidence: finding.confidence,
+              significance: finding.significance,
+              evidenceSources: finding.evidenceSources,
+            })),
+          });
+        }
+
+        await tx.lead.update({
+          where: { id: leadId },
+          data: {
+            status: nextStatus,
+            qualificationDecision: result.decision,
+            qualificationReason: result.decisionReason,
+            priorityScore: null,
+            primaryOutreachAngle: null,
+            researchSummary: result.researchSummary,
+            researchVersion: RESEARCH_VERSION,
+            lastResearchedAt: new Date(),
+            assetStrength: result.assetStrength,
+            assetAssessment: {
+              dimensions: result.dimensions,
+              performanceAssessment,
+              siteCoverage: website.siteCoverage,
+              findings: result.findings,
+              confidence: result.confidence,
+            },
+          },
+        });
+        await tx.activity.create({
+          data: {
+            leadId,
+            type: "research_completed",
+            summary: `${result.decision}: ${result.decisionReason}`,
+            metadata: {
+              assetStrength: result.assetStrength,
+              confidence: result.confidence,
+              model,
+              researchVersion: RESEARCH_VERSION,
+              preparationStatus: preparation.status,
+              enrichmentAttempted: preparation.enrichmentAttempted,
+              strongPerformanceSignal: performanceAssessment.strongPerformanceSignal,
+              representativePagesFetched: website.siteCoverage.representativePagesFetched,
+            },
+          },
+        });
         await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
       });
 
-      // Research has successfully replaced the evidence set. Any unsent initial
-      // copy based on the previous evidence is now stale. Never touch sending or
-      // sent messages; only draft/approved copy is invalidated and regenerated.
+      // A v6 assessment intentionally does not generate outreach. PRIORITIZE and
+      // SELECT OUTREACH ANGLE are separate downstream stages and have not yet run.
       const invalidatedDrafts = await invalidateUnsentInitialOutreach(prisma, leadId);
-      let draft = null;
-      if (result.decision === "qualified") {
-        try { draft = await ensureInitialOutreachDraft(prisma, leadId); }
-        catch (error) { console.error(`[AI] Draft generation failed for lead ${leadId}:`, error); }
-      }
-      return { result, priorityScore, draft, preparation, invalidatedDrafts };
+      return { result, priorityScore: null, draft: null, preparation, invalidatedDrafts, assessmentId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
@@ -122,11 +192,11 @@ export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10
     take: safeLimit,
     select: { id: true },
   });
-  const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number; draftId?: number; error?: string }> = [];
+  const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number | null; draftId?: number; error?: string }> = [];
   for (const lead of leads) {
     try {
       const processed = await processLeadResearch(prisma, lead.id);
-      results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore, draftId: processed.draft?.id });
+      results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore });
     } catch (error) {
       results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -140,7 +210,7 @@ type PreparedResearchResult = {
   success: boolean;
   skipped?: boolean;
   decision?: string;
-  priorityScore?: number;
+  priorityScore?: number | null;
   draftId?: number;
   error?: string;
 };
@@ -157,7 +227,6 @@ export async function processPreparedResearchBatch(prisma: PrismaClient, leadIds
         success: true,
         decision: processed.result.decision,
         priorityScore: processed.priorityScore,
-        draftId: processed.draft?.id,
       });
     } catch (error) {
       if (error instanceof ResearchPreparationError) {
@@ -199,11 +268,17 @@ function statusForResearchError(message: string) {
   return 500;
 }
 
+const assetAssessmentInclude = {
+  orderBy: { createdAt: "desc" as const },
+  take: 1,
+  include: { findings: { orderBy: [{ significance: "desc" as const }, { confidence: "desc" as const }] } },
+};
+
 export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   registerEnrichmentRoutes(app, prisma);
   app.get("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
-    const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } });
+    const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } });
     if (!lead) { res.status(404).json({ error: "Lead not found" }); return; } res.json(lead);
   });
   app.post("/api/leads/:id/research", async (req, res) => {
@@ -213,7 +288,8 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
       res.json({
         preparation: processed.preparation,
         invalidatedDrafts: processed.invalidatedDrafts,
-        lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } }),
+        assessmentId: processed.assessmentId,
+        lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, outreachMessages: { orderBy: { generatedAt: "desc" } } } }),
       });
     } catch (error) {
       if (error instanceof ResearchPreparationError) {
