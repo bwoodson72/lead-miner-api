@@ -2,6 +2,7 @@ import { detectAgency } from "./agency-filter.js";
 import { detectNationalChain } from "./chain-filter.js";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
+import { findIdentityVerifiedListingPhone } from "./enrichment-listing.js";
 import {
   assessSiteBusinessIdentity,
   domainsMatch,
@@ -30,6 +31,7 @@ export type EnrichmentInput = {
   existingBusinessName?: string;
   existingPhone?: string;
   existingAddress?: string;
+  revalidateExistingPhone?: boolean;
 };
 
 type FetchResult = { html: string; finalUrl: string } | null;
@@ -237,24 +239,33 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   const startTime = Date.now(); const notes: string[] = [];
   console.log(`[Enrichment] Starting enrichment for ${input.url}`);
   const inputDomain = new URL(input.url).hostname.replace(/^www\./,"");
-  const identityContext: EnrichmentIdentityContext = {
+  const baseIdentityContext: EnrichmentIdentityContext = {
     domain: inputDomain,
     ...(input.existingBusinessName && { businessName: input.existingBusinessName }),
-    ...(input.existingPhone && { phone: input.existingPhone }),
     ...(input.existingAddress && { address: input.existingAddress }),
   };
+  const verifiedListingPhone = input.revalidateExistingPhone
+    ? await findIdentityVerifiedListingPhone(baseIdentityContext)
+    : undefined;
+  const identityPhone = verifiedListingPhone ?? (!input.revalidateExistingPhone ? input.existingPhone : undefined);
+  const identityContext: EnrichmentIdentityContext = {
+    ...baseIdentityContext,
+    ...(identityPhone && { phone: identityPhone }),
+  };
+
   const homepage = await fetchHomepage(input.url);
   if (!homepage) {
     notes.push("Homepage unavailable across protocol/host variants");
+    if (verifiedListingPhone) notes.push("Revalidated phone against identity-matched local-business listing");
     const indexedEmail = await serperEmailSearch(identityContext);
     const elapsed = Date.now() - startTime;
     if (indexedEmail) {
       notes.push("Found identity-verified email via search-index fallback despite unreachable site");
       console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=yes, source=search-index, elapsed=${elapsed}ms`);
-      return { ...(input.existingBusinessName && { businessName: input.existingBusinessName }), email: indexedEmail, enrichmentStatus: "enriched", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms` };
+      return { ...(input.existingBusinessName && { businessName: input.existingBusinessName }), email: indexedEmail, ...(verifiedListingPhone && { phone: verifiedListingPhone }), enrichmentStatus: "enriched", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms` };
     }
     console.log(`[Enrichment] Completed ${input.url} — status=failed, email=no, source=search-index-exhausted, elapsed=${elapsed}ms`);
-    return { enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; identity-verified search-index fallback found no email; elapsed=${elapsed}ms` };
+    return { ...(verifiedListingPhone && { phone: verifiedListingPhone }), enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; identity-verified search-index fallback found no email; elapsed=${elapsed}ms` };
   }
 
   const url = homepage.finalUrl;
@@ -266,14 +277,16 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   const siteContactDataTrusted = domainIdentityMatches && (!input.existingBusinessName || businessIdentity === "match");
 
   let email = siteContactDataTrusted ? pickBestEmail(extractEmails(homepage.html), inputDomain) : undefined;
-  let phone = !input.existingPhone && siteContactDataTrusted ? pickBestPhone(extractPhones(homepage.html)) : undefined;
+  let phone = verifiedListingPhone ?? (!input.existingPhone && siteContactDataTrusted ? pickBestPhone(extractPhones(homepage.html)) : undefined);
   let contactPageUrl: string | undefined;
   notes.push(`Fetched ${url}`);
+  if (verifiedListingPhone) notes.push("Revalidated phone against identity-matched local-business listing");
   if (!domainIdentityMatches) notes.push(`Rejected site-derived contacts: destination domain ${siteDomain} does not match source domain ${inputDomain}`);
   else if (businessIdentity === "conflict") notes.push(`Rejected site-derived contacts: site identity ${observedBusinessName ?? "unknown"} conflicts with source business ${input.existingBusinessName}`);
   else if (input.existingBusinessName && businessIdentity !== "match") notes.push(`Rejected site-derived contacts: site identity could not be corroborated with source business ${input.existingBusinessName}`);
   else if (email) notes.push("Found email on identity-consistent homepage");
-  if (input.existingPhone) notes.push("Preserved phone from discovery source; website phone cannot overwrite it");
+  if (input.existingPhone && !input.revalidateExistingPhone) notes.push("Preserved phone from discovery source; website phone cannot overwrite it");
+  else if (input.existingPhone && input.revalidateExistingPhone && !verifiedListingPhone) notes.push("Existing phone could not be independently revalidated; left unchanged by caller");
 
   const agencyDetection = siteContactDataTrusted ? detectAgency(homepage.html) : { isAgencyManaged: false as const };
   const chainDetection = siteContactDataTrusted ? detectNationalChain(homepage.html, undefined, siteDomain) : { isNationalChain: false as const };
@@ -302,7 +315,7 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
       if (!page) continue;
       if (!domainsMatch(new URL(page.finalUrl).hostname, inputDomain)) continue;
       email ||= pickBestEmail(extractEmails(page.html), inputDomain);
-      if (!input.existingPhone) phone ||= pickBestPhone(extractPhones(page.html));
+      if (!input.existingPhone && !verifiedListingPhone) phone ||= pickBestPhone(extractPhones(page.html));
       if (email) { contactPageUrl = page.finalUrl; notes.push(`Found email on identity-consistent ${new URL(page.finalUrl).pathname}`); break; }
     }
   }
