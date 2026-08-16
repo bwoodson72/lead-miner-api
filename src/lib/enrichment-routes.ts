@@ -68,22 +68,26 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
         existingAddress: lead.address ?? undefined,
         revalidateExistingPhone: Boolean(options.forceRevalidate && enrichmentOwnedPhone),
       });
-      const email = enrichment.email?.toLowerCase() ?? null;
+      const discoveredEmail = enrichment.email?.toLowerCase() ?? null;
+      const emailProtected = Boolean(options.forceRevalidate && currentEmail && !enrichmentOwnedEmail);
+      const email = emailProtected ? currentEmail : discoveredEmail;
       const revalidatedPhone = normalizePhone(enrichment.phone);
-      const emailIdentityChanged = Boolean(options.forceRevalidate && enrichmentOwnedEmail && currentEmail && currentEmail !== email);
+      const emailIdentityChanged = Boolean(options.forceRevalidate && enrichmentOwnedEmail && currentEmail && currentEmail !== discoveredEmail);
       const phoneIdentityChanged = Boolean(options.forceRevalidate && enrichmentOwnedPhone && currentPhone && revalidatedPhone && currentPhone !== revalidatedPhone);
       const phoneRevalidated = Boolean(options.forceRevalidate && enrichmentOwnedPhone && revalidatedPhone);
-      const state = email
-        ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate ? "email_identity_revalidated" : "email_discovered" }
-        : enrichment.enrichmentStatus === "failed"
-          ? retryState(attempts)
-          : { emailEnrichmentStatus: "exhausted", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate && currentEmail && enrichmentOwnedEmail ? "email_identity_rejected" : "search_exhausted" };
+      const state = emailProtected
+        ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_protected_non_enrichment" }
+        : email
+          ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate ? "email_identity_revalidated" : "email_discovered" }
+          : enrichment.enrichmentStatus === "failed"
+            ? retryState(attempts)
+            : { emailEnrichmentStatus: "exhausted", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate && currentEmail && enrichmentOwnedEmail ? "email_identity_rejected" : "search_exhausted" };
 
       await prisma.$transaction(async (tx) => {
         await tx.lead.update({
           where: { id: leadId },
           data: {
-            email: options.forceRevalidate && enrichmentOwnedEmail ? email : email ?? undefined,
+            email: emailProtected ? undefined : options.forceRevalidate && enrichmentOwnedEmail ? discoveredEmail : discoveredEmail ?? undefined,
             phone: revalidatedPhone ?? enrichment.phone ?? undefined,
             contactPageUrl: enrichment.contactPageUrl ?? undefined,
             businessName: enrichment.businessName ?? undefined,
@@ -119,11 +123,11 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
           });
         }
 
-        if (email) {
+        if (discoveredEmail && !emailProtected) {
           await tx.contact.upsert({
-            where: { leadId_type_value: { leadId, type: "email", value: email } },
+            where: { leadId_type_value: { leadId, type: "email", value: discoveredEmail } },
             update: { isPrimary: true, source: "email_enrichment", verificationStatus: options.forceRevalidate ? "identity_verified" : "discovered" },
-            create: { leadId, type: "email", value: email, isPrimary: true, source: "email_enrichment", verificationStatus: options.forceRevalidate ? "identity_verified" : "discovered" },
+            create: { leadId, type: "email", value: discoveredEmail, isPrimary: true, source: "email_enrichment", verificationStatus: options.forceRevalidate ? "identity_verified" : "discovered" },
           });
         }
         if (revalidatedPhone) {
@@ -134,23 +138,27 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
           });
         }
 
-        const activityType = emailIdentityChanged
-          ? email ? "email_identity_replaced" : "email_identity_invalidated"
-          : email ? options.forceRevalidate ? "email_identity_revalidated" : "email_enriched"
-          : state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted";
-        const summary = emailIdentityChanged
-          ? email ? `Enriched email replaced after identity revalidation: ${email}` : "Enriched email removed after identity revalidation failed"
-          : email
-            ? options.forceRevalidate ? `Enriched email identity revalidated: ${email}` : `Email discovered before AI research: ${email}`
-            : state.emailEnrichmentStatus === "retry"
-              ? `Email enrichment fetch failed; retry ${attempts + 1} scheduled`
-              : "Email enrichment exhausted with no identity-verified usable address";
+        const activityType = emailProtected
+          ? phoneRevalidated ? "contact_identity_revalidated" : "email_identity_protected"
+          : emailIdentityChanged
+            ? discoveredEmail ? "email_identity_replaced" : "email_identity_invalidated"
+            : discoveredEmail ? options.forceRevalidate ? "email_identity_revalidated" : "email_enriched"
+            : state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted";
+        const summary = emailProtected
+          ? phoneRevalidated ? "Enrichment-owned phone revalidated; non-enrichment email was protected" : "Non-enrichment email was protected from forced revalidation"
+          : emailIdentityChanged
+            ? discoveredEmail ? `Enriched email replaced after identity revalidation: ${discoveredEmail}` : "Enriched email removed after identity revalidation failed"
+            : discoveredEmail
+              ? options.forceRevalidate ? `Enriched email identity revalidated: ${discoveredEmail}` : `Email discovered before AI research: ${discoveredEmail}`
+              : state.emailEnrichmentStatus === "retry"
+                ? `Email enrichment fetch failed; retry ${attempts + 1} scheduled`
+                : "Email enrichment exhausted with no identity-verified usable address";
         await tx.activity.create({
           data: {
             leadId,
             type: activityType,
             summary,
-            metadata: { previousEmail: emailIdentityChanged ? currentEmail : null, email, previousPhone: phoneIdentityChanged ? currentPhone : null, phone: revalidatedPhone ?? currentPhone, phoneRevalidated, phoneIdentityChanged, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null, forceRevalidate: Boolean(options.forceRevalidate) },
+            metadata: { previousEmail: emailIdentityChanged ? currentEmail : null, email, discoveredEmail, emailProtected, previousPhone: phoneIdentityChanged ? currentPhone : null, phone: revalidatedPhone ?? currentPhone, phoneRevalidated, phoneIdentityChanged, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null, forceRevalidate: Boolean(options.forceRevalidate) },
           },
         });
         if (phoneRevalidated) {
@@ -164,7 +172,7 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
           });
         }
       });
-      return { leadId, email, phone: revalidatedPhone ?? currentPhone, found: Boolean(email), alreadyPresent: false, revalidated: Boolean(options.forceRevalidate), identityChanged: emailIdentityChanged, phoneRevalidated, phoneIdentityChanged, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt };
+      return { leadId, email, discoveredEmail, emailProtected, phone: revalidatedPhone ?? currentPhone, found: Boolean(email), alreadyPresent: false, revalidated: Boolean(options.forceRevalidate), identityChanged: emailIdentityChanged, phoneRevalidated, phoneIdentityChanged, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt };
     } catch (error) {
       const state = retryState(attempts);
       const text = error instanceof Error ? error.message : String(error);
