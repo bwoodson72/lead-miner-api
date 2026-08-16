@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateOutreachDraft } from "../src/lib/ai-outreach.js";
 
-test("outreach drafting refuses to call AI when no vetted problem survives", async () => {
+test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
   await assert.rejects(
     () => generateOutreachDraft({
       businessName: "Example Foundation Repair",
@@ -19,7 +19,7 @@ test("outreach drafting refuses to call AI when no vetted problem survives", asy
         outreachValue: "low",
       }],
     }, "unused-model", 0.7, "Write a concise evidence-backed email."),
-    /No evidence-backed outreach problem meets the configured safety threshold/,
+    /No evidence-backed outreach finding meets the configured safety threshold/,
   );
 });
 
@@ -40,6 +40,6 @@ test("outreach drafting rejects old stored claims that a contact page has no for
         outreachValue: "high",
       }],
     }, "unused-model", 0.7, "Write a concise evidence-backed email."),
-    /No evidence-backed outreach problem meets the configured safety threshold/,
+    /No evidence-backed outreach finding meets the configured safety threshold/,
   );
 });
