@@ -102,7 +102,7 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
 
 export async function syncReplies(prisma: PrismaClient, limit = 50) {
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationReplySyncMax, SAFETY_LIMITS.automationReplySyncMax);
-  const leads = await prisma.lead.findMany({ where: { OR: [{ emailThreads: { some: { provider: "gmail" } } }, { outreachMessages: { some: { status: "sent", providerThreadId: { not: null } } }], status: { in: ["contacted", "replied", "interested"] } }, orderBy: { lastOutreachDate: "desc" }, take: safeLimit, select: { id: true } });
+  const leads = await prisma.lead.findMany({ where: { OR: [{ emailThreads: { some: { provider: "gmail" } } }, { outreachMessages: { some: { status: "sent", providerThreadId: { not: null } } } }], status: { in: ["contacted", "replied", "interested", "closed_no_response"] } }, orderBy: { lastOutreachDate: "desc" }, take: safeLimit, select: { id: true } });
   const results: Array<{ leadId: number; reply?: string; success: boolean; error?: string }> = [];
   for (const lead of leads) { try { const result = await syncLeadReply(prisma, lead.id); results.push({ leadId: lead.id, reply: result?.classification, success: true }); } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
   return results;
