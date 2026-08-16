@@ -6,6 +6,9 @@ import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [86_400_000, 7 * 86_400_000];
+const ENRICHMENT_CONTACT_SOURCES = ["enrichment", "email_enrichment"];
+
+type EnrichLeadEmailOptions = { forceRevalidate?: boolean };
 
 function retryState(attempts: number) {
   if (attempts >= MAX_RETRY_ATTEMPTS) {
@@ -15,17 +18,29 @@ function retryState(attempts: number) {
   return { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: new Date(Date.now() + delay), emailEnrichmentReason: "site_fetch_failed" };
 }
 
-export async function enrichLeadEmail(prisma: PrismaClient, leadId: number) {
+export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, options: EnrichLeadEmailOptions = {}) {
   const leadLease = await acquireAutomationLease(prisma, `email-enrichment-lead:${leadId}`, 3 * 60_000);
   if (!leadLease) throw new Error("Email enrichment is already running for this lead");
   try {
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead) throw new Error("Lead not found");
-    if (lead.email) {
+    const currentEmail = lead.email?.toLowerCase() ?? null;
+
+    if (currentEmail && !options.forceRevalidate) {
       if (lead.emailEnrichmentStatus !== "found") {
         await prisma.lead.update({ where: { id: leadId }, data: { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_present" } });
       }
-      return { leadId, email: lead.email, found: true, alreadyPresent: true, status: "found" };
+      return { leadId, email: currentEmail, found: true, alreadyPresent: true, status: "found" };
+    }
+
+    if (currentEmail && options.forceRevalidate) {
+      const enrichmentOwnedContact = await prisma.contact.findFirst({
+        where: { leadId, type: "email", value: currentEmail, source: { in: ENRICHMENT_CONTACT_SOURCES } },
+        select: { id: true },
+      });
+      if (!enrichmentOwnedContact) {
+        return { leadId, email: currentEmail, found: true, alreadyPresent: true, protected: true, status: "found", reason: "Existing email is not enrichment-sourced" };
+      }
     }
 
     const attempts = lead.emailEnrichmentAttempts + 1;
@@ -41,17 +56,18 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number) {
         existingAddress: lead.address ?? undefined,
       });
       const email = enrichment.email?.toLowerCase() ?? null;
+      const identityChanged = Boolean(options.forceRevalidate && currentEmail && currentEmail !== email);
       const state = email
-        ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_discovered" }
+        ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate ? "email_identity_revalidated" : "email_discovered" }
         : enrichment.enrichmentStatus === "failed"
           ? retryState(attempts)
-          : { emailEnrichmentStatus: "exhausted", nextEmailEnrichmentAt: null, emailEnrichmentReason: "search_exhausted" };
+          : { emailEnrichmentStatus: "exhausted", nextEmailEnrichmentAt: null, emailEnrichmentReason: options.forceRevalidate && currentEmail ? "email_identity_rejected" : "search_exhausted" };
 
       await prisma.$transaction(async (tx) => {
         await tx.lead.update({
           where: { id: leadId },
           data: {
-            email: email ?? undefined,
+            email: options.forceRevalidate ? email : email ?? undefined,
             phone: enrichment.phone ?? undefined,
             contactPageUrl: enrichment.contactPageUrl ?? undefined,
             businessName: enrichment.businessName ?? undefined,
@@ -68,11 +84,23 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number) {
             chainReason: enrichment.chainReason ?? undefined,
           },
         });
+
+        if (identityChanged && currentEmail) {
+          await tx.contact.updateMany({
+            where: { leadId, type: "email", value: currentEmail, source: { in: ENRICHMENT_CONTACT_SOURCES } },
+            data: { isPrimary: false, verificationStatus: "rejected_identity_mismatch" },
+          });
+          await tx.outreachMessage.updateMany({
+            where: { leadId, status: { in: ["draft", "approved"] } },
+            data: { status: "cancelled" },
+          });
+        }
+
         if (email) {
           await tx.contact.upsert({
             where: { leadId_type_value: { leadId, type: "email", value: email } },
-            update: { isPrimary: true, source: "email_enrichment", verificationStatus: "discovered" },
-            create: { leadId, type: "email", value: email, isPrimary: true, source: "email_enrichment", verificationStatus: "discovered" },
+            update: { isPrimary: true, source: "email_enrichment", verificationStatus: options.forceRevalidate ? "identity_verified" : "discovered" },
+            create: { leadId, type: "email", value: email, isPrimary: true, source: "email_enrichment", verificationStatus: options.forceRevalidate ? "identity_verified" : "discovered" },
           });
         }
         if (enrichment.phone) {
@@ -82,26 +110,34 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number) {
             create: { leadId, type: "phone", value: enrichment.phone, isPrimary: true, source: "email_enrichment" },
           });
         }
+
+        const activityType = identityChanged
+          ? email ? "email_identity_replaced" : "email_identity_invalidated"
+          : email ? options.forceRevalidate ? "email_identity_revalidated" : "email_enriched"
+          : state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted";
+        const summary = identityChanged
+          ? email ? `Enriched email replaced after identity revalidation: ${email}` : "Enriched email removed after identity revalidation failed"
+          : email
+            ? options.forceRevalidate ? `Enriched email identity revalidated: ${email}` : `Email discovered before AI research: ${email}`
+            : state.emailEnrichmentStatus === "retry"
+              ? `Email enrichment fetch failed; retry ${attempts + 1} scheduled`
+              : "Email enrichment exhausted with no identity-verified usable address";
         await tx.activity.create({
           data: {
             leadId,
-            type: email ? "email_enriched" : state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted",
-            summary: email
-              ? `Email discovered before AI research: ${email}`
-              : state.emailEnrichmentStatus === "retry"
-                ? `Email enrichment fetch failed; retry ${attempts + 1} scheduled`
-                : "Email enrichment exhausted with no usable address",
-            metadata: { email, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null },
+            type: activityType,
+            summary,
+            metadata: { previousEmail: identityChanged ? currentEmail : null, email, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null, forceRevalidate: Boolean(options.forceRevalidate) },
           },
         });
       });
-      return { leadId, email, found: Boolean(email), alreadyPresent: false, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt };
+      return { leadId, email, found: Boolean(email), alreadyPresent: false, revalidated: Boolean(options.forceRevalidate), identityChanged, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt };
     } catch (error) {
       const state = retryState(attempts);
       const text = error instanceof Error ? error.message : String(error);
       await prisma.$transaction(async (tx) => {
         await tx.lead.update({ where: { id: leadId }, data: { emailEnrichmentStatus: state.emailEnrichmentStatus, emailEnrichmentAttempts: attempts, lastEmailEnrichmentAt: attemptedAt, nextEmailEnrichmentAt: state.nextEmailEnrichmentAt, emailEnrichmentReason: text } });
-        await tx.activity.create({ data: { leadId, type: state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted", summary: state.emailEnrichmentStatus === "retry" ? `Email enrichment errored; retry ${attempts + 1} scheduled` : "Email enrichment exhausted after repeated errors", metadata: { attempts, error: text, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null } } });
+        await tx.activity.create({ data: { leadId, type: state.emailEnrichmentStatus === "retry" ? "email_enrichment_retry_scheduled" : "email_enrichment_exhausted", summary: state.emailEnrichmentStatus === "retry" ? `Email enrichment errored; retry ${attempts + 1} scheduled` : "Email enrichment exhausted after repeated errors", metadata: { attempts, error: text, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, forceRevalidate: Boolean(options.forceRevalidate) } } });
       });
       throw error;
     } finally {
@@ -140,7 +176,8 @@ export function registerEnrichmentRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/leads/:id/enrich-email", async (req, res) => {
     const id = Number(req.params["id"]);
     if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
-    try { res.json(await enrichLeadEmail(prisma, id)); }
+    const forceRevalidate = req.query["force"] === "true" || req.query["force"] === "1";
+    try { res.json(await enrichLeadEmail(prisma, id, { forceRevalidate })); }
     catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       res.status(text.includes("concurrency limit") || text.includes("already running") ? 409 : 500).json({ error: text });
