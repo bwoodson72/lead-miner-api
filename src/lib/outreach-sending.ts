@@ -50,6 +50,16 @@ async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
   return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
 }
 
+async function globalSuppressionReason(prisma: PrismaClient, lead: any) {
+  const checks: Array<{ type: string; value: string }> = [];
+  if (lead.email) checks.push({ type: "email", value: lead.email.toLowerCase() });
+  if (lead.domain) checks.push({ type: "domain", value: lead.domain.toLowerCase().replace(/^www\./, "") });
+  if (lead.category) checks.push({ type: "category", value: lead.category.toLowerCase() });
+  if (!checks.length) return null;
+  const suppression = await prisma.suppression.findFirst({ where: { OR: checks.map((check) => ({ type: check.type, value: check.value })) } });
+  return suppression ? `Suppressed by ${suppression.type}: ${suppression.reason}` : null;
+}
+
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true } } } });
   if (!message) throw new Error("Message not found");
@@ -57,6 +67,8 @@ async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   if (message.scheduledAt && message.scheduledAt > new Date()) throw new Error(`Message is scheduled for ${message.scheduledAt.toISOString()}`);
   const paused = await prisma.suppression.findUnique({ where: { type_value: { type: "global", value: "outreach" } } });
   if (paused) throw new Error("Outreach is paused");
+  const globalReason = await globalSuppressionReason(prisma, message.lead);
+  if (globalReason) throw new Error(globalReason);
   const reason = getSendIneligibilityReason(message.lead);
   if (reason) throw new Error(reason);
   if (message.lead.lastOutreachDate && message.sequenceNumber > 1 && Date.now() - message.lead.lastOutreachDate.getTime() < MIN_MESSAGE_INTERVAL_MS) {
