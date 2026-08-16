@@ -26,6 +26,11 @@ function domOnly(finding: AssetFinding) {
   return finding.evidenceSources.length > 0 && finding.evidenceSources.every((source) => UNVERIFIED_DOM_SOURCES.has(source));
 }
 
+function searchIndexOnly(finding: AssetFinding) {
+  const allowed = new Set<ResearchEvidenceSource>(["search_index", "site_coverage"]);
+  return finding.evidenceSources.includes("search_index") && finding.evidenceSources.every((source) => allowed.has(source));
+}
+
 export function containsUnsupportedVisitorReachabilityClaim(value: string | null | undefined) {
   return Boolean(value && UNSUPPORTED_VISITOR_REACHABILITY.test(value));
 }
@@ -49,6 +54,13 @@ export function applyAssetFindingSafety<T extends AssetFinding>(finding: T): T {
       ...finding,
       confidence: Math.min(finding.confidence, 0.2),
       significance: lowerSignificance(finding.significance, "low"),
+    };
+  }
+  if (searchIndexOnly(finding)) {
+    return {
+      ...finding,
+      confidence: Math.min(finding.confidence, 0.65),
+      significance: lowerSignificance(finding.significance, "medium"),
     };
   }
   if (domOnly(finding) && containsTemplateContamination(claim)) {
