@@ -3,7 +3,6 @@ import cors from "cors";
 import { stringify as csvStringify } from "csv-stringify/sync";
 import { KeywordInputSchema } from "./lib/schemas.js";
 import { runLeadSearchPipeline } from "./lib/pipeline.js";
-import { getEnv } from "./lib/env.js";
 import { DEFAULT_KEYWORDS } from "./config/keywords.js";
 import { DEFAULT_THRESHOLDS } from "./config/thresholds.js";
 import { createJob, getJob, updateJob, cleanOldJobs } from "./lib/jobs.js";
@@ -43,9 +42,8 @@ app.get("/api/cron", async (req, res) => {
   const auth = authorizeCronRequest(req.headers.authorization);
   if (!auth.ok) { res.status(auth.status).json({ success: false, error: auth.error }); return; }
 
-  const env = getEnv();
   try {
-    const input = KeywordInputSchema.parse({ keywords: DEFAULT_KEYWORDS.join("\n"), ...DEFAULT_THRESHOLDS, email: env.REPORT_EMAIL });
+    const input = KeywordInputSchema.parse({ keywords: DEFAULT_KEYWORDS.join("\n"), ...DEFAULT_THRESHOLDS });
     const { leads, keywords, diagnostics } = await runLeadSearchPipeline(input);
     res.json({ success: true, leadsFound: leads.length, leads, keywords, diagnostics });
   } catch (err) { res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) }); }
