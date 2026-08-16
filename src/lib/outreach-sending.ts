@@ -3,6 +3,7 @@ import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
+import { TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber, normalizeFollowUpDelays } from "./outreach-sequence.js";
 import {
   getSendIneligibilityReason,
   isWithinSendWindow,
@@ -14,7 +15,8 @@ const DAY_MS = 86_400_000;
 const STALE_SEND_MS = 2 * 60_000;
 
 export function nextFollowUpDate(delays: unknown, sequenceNumber: number): Date | null {
-  const values = Array.isArray(delays) ? delays.filter((v): v is number => Number.isInteger(v) && Number(v) > 0) : [];
+  if (!Number.isInteger(sequenceNumber) || sequenceNumber < 1 || sequenceNumber >= TOTAL_OUTREACH_TOUCHES) return null;
+  const values = normalizeFollowUpDelays(delays);
   const delay = values[sequenceNumber - 1];
   return delay ? new Date(Date.now() + delay * DAY_MS) : null;
 }
@@ -42,6 +44,7 @@ async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true } } } });
   if (!message) throw new Error("Message not found");
+  if (message.sequenceNumber > TOTAL_OUTREACH_TOUCHES) throw new Error(`Outreach sequence is capped at ${TOTAL_OUTREACH_TOUCHES} total touches`);
   const reason = getSendIneligibilityReason(message.lead);
   if (reason) throw new Error(reason);
   return message;
@@ -72,7 +75,8 @@ export async function claimApprovedMessage(
 async function completeSend(prisma: PrismaClient, message: any, provider: { providerMessageId: string; providerThreadId: string | null; reconciled: boolean }) {
   const sequence = await getActiveOutreachSequence(prisma);
   const sentAt = new Date();
-  const followUpDate = nextFollowUpDate(sequence.delaysDays, message.sequenceNumber);
+  const breakup = message.kind === "followup" && isBreakupSequenceNumber(message.sequenceNumber);
+  const followUpDate = breakup ? null : nextFollowUpDate(sequence.delaysDays, message.sequenceNumber);
   const nextStatus = followUpDate ? "contacted" : "closed_no_response";
 
   return prisma.$transaction(async (tx) => {
@@ -81,11 +85,12 @@ async function completeSend(prisma: PrismaClient, message: any, provider: { prov
     if (provider.providerThreadId) {
       await tx.emailThread.upsert({
         where: { providerThreadId: provider.providerThreadId },
-        update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
-        create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
+        update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt },
+        create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt },
       });
     }
-    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${message.sequenceNumber - 1}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey } } });
+    const followUpNumber = message.kind === "followup" ? message.sequenceNumber - 1 : null;
+    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey, followUpNumber, breakup } } });
     return updated;
   });
 }
@@ -155,7 +160,7 @@ export async function reconcileStaleSends(
 
 export async function sendApprovedQueue(prisma: PrismaClient, limit = 25) {
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
-  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved" }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
+  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES } }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
   for (const message of messages) {
     try { await sendApprovedMessage(prisma, message.id); results.push({ messageId: message.id, success: true }); }
