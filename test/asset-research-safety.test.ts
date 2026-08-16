@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyAssetFindingSafety } from "../src/lib/asset-research-safety.js";
+import {
+  applyAssetFindingSafety,
+  isUnsupportedCrawlerReachabilityFinding,
+} from "../src/lib/asset-research-safety.js";
 
 test("raw-DOM-only template contamination cannot become a high-significance v6 finding", () => {
   const finding = applyAssetFindingSafety({
@@ -28,4 +31,36 @@ test("missing-form claims are capped even in the business asset model", () => {
   });
   assert.equal(finding.confidence, 0.2);
   assert.equal(finding.significance, "low");
+});
+
+test("crawler failure cannot become a visitor-reachability defect", () => {
+  const crownStyleFinding = {
+    category: "objective_defect",
+    title: "Homepage is currently unreachable",
+    evidence: "The website record reports fetch failed, no final URL, no page content, and no discovered pages.",
+    assetCapability: "This can prevent prospective roofing customers from accessing services or contact options.",
+    confidence: 0.97,
+    significance: "high" as const,
+    evidenceSources: ["site_coverage"] as const,
+  };
+  assert.equal(isUnsupportedCrawlerReachabilityFinding(crownStyleFinding), true);
+  const safe = applyAssetFindingSafety(crownStyleFinding);
+  assert.equal(safe.confidence, 0.1);
+  assert.equal(safe.significance, "low");
+});
+
+test("ordinary objective defects are not suppressed by the reachability guard", () => {
+  const finding = {
+    category: "objective_defect",
+    title: "Quote CTA points to unrelated destination",
+    evidence: "The visible Get a Quote CTA resolves to an unrelated external domain.",
+    assetCapability: "The observed CTA destination does not support the intended customer action.",
+    confidence: 0.97,
+    significance: "high" as const,
+    evidenceSources: ["cta"] as const,
+  };
+  assert.equal(isUnsupportedCrawlerReachabilityFinding(finding), false);
+  const safe = applyAssetFindingSafety(finding);
+  assert.equal(safe.confidence, 0.97);
+  assert.equal(safe.significance, "high");
 });
