@@ -37,24 +37,23 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
 
     let enrichmentOwnedEmail = false;
     let enrichmentOwnedPhone = false;
-    if (options.forceRevalidate) {
-      if (currentEmail) {
-        enrichmentOwnedEmail = Boolean(await prisma.contact.findFirst({
-          where: { leadId, type: "email", value: currentEmail, source: { in: ENRICHMENT_CONTACT_SOURCES } },
-          select: { id: true },
-        }));
-      }
-      if (lead.phone) {
-        enrichmentOwnedPhone = Boolean(await prisma.contact.findFirst({
-          where: { leadId, type: "phone", value: lead.phone, source: { in: ENRICHMENT_CONTACT_SOURCES } },
-          select: { id: true },
-        }));
-      }
-      if (currentEmail && !enrichmentOwnedEmail && !enrichmentOwnedPhone) {
-        return { leadId, email: currentEmail, phone: currentPhone, found: true, alreadyPresent: true, protected: true, status: "found", reason: "Existing contacts are not enrichment-sourced" };
-      }
+    if (options.forceRevalidate && currentEmail) {
+      enrichmentOwnedEmail = Boolean(await prisma.contact.findFirst({
+        where: { leadId, type: "email", value: currentEmail, source: { in: ENRICHMENT_CONTACT_SOURCES } },
+        select: { id: true },
+      }));
+    }
+    if (lead.phone && (options.forceRevalidate || !currentEmail)) {
+      enrichmentOwnedPhone = Boolean(await prisma.contact.findFirst({
+        where: { leadId, type: "phone", value: lead.phone, source: { in: ENRICHMENT_CONTACT_SOURCES } },
+        select: { id: true },
+      }));
+    }
+    if (options.forceRevalidate && currentEmail && !enrichmentOwnedEmail && !enrichmentOwnedPhone) {
+      return { leadId, email: currentEmail, phone: currentPhone, found: true, alreadyPresent: true, protected: true, status: "found", reason: "Existing contacts are not enrichment-sourced" };
     }
 
+    const phoneRevalidationRequested = Boolean(enrichmentOwnedPhone && (options.forceRevalidate || !currentEmail));
     const attempts = lead.emailEnrichmentAttempts + 1;
     const attemptedAt = new Date();
     const slot = await acquireAutomationSlot(prisma, "email-enrichment", SAFETY_LIMITS.emailEnrichmentConcurrency, 3 * 60_000);
@@ -66,15 +65,15 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
         existingBusinessName: lead.businessName ?? undefined,
         existingPhone: lead.phone ?? undefined,
         existingAddress: lead.address ?? undefined,
-        revalidateExistingPhone: Boolean(options.forceRevalidate && enrichmentOwnedPhone),
+        revalidateExistingPhone: phoneRevalidationRequested,
       });
       const discoveredEmail = enrichment.email?.toLowerCase() ?? null;
       const emailProtected = Boolean(options.forceRevalidate && currentEmail && !enrichmentOwnedEmail);
       const email = emailProtected ? currentEmail : discoveredEmail;
       const revalidatedPhone = normalizePhone(enrichment.phone);
       const emailIdentityChanged = Boolean(options.forceRevalidate && enrichmentOwnedEmail && currentEmail && currentEmail !== discoveredEmail);
-      const phoneIdentityChanged = Boolean(options.forceRevalidate && enrichmentOwnedPhone && currentPhone && revalidatedPhone && currentPhone !== revalidatedPhone);
-      const phoneRevalidated = Boolean(options.forceRevalidate && enrichmentOwnedPhone && revalidatedPhone);
+      const phoneIdentityChanged = Boolean(phoneRevalidationRequested && currentPhone && revalidatedPhone && currentPhone !== revalidatedPhone);
+      const phoneRevalidated = Boolean(phoneRevalidationRequested && revalidatedPhone);
       const state = emailProtected
         ? { emailEnrichmentStatus: "found", nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_protected_non_enrichment" }
         : email
@@ -88,7 +87,7 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
           where: { id: leadId },
           data: {
             email: emailProtected ? undefined : options.forceRevalidate && enrichmentOwnedEmail ? discoveredEmail : discoveredEmail ?? undefined,
-            phone: revalidatedPhone ?? enrichment.phone ?? undefined,
+            phone: revalidatedPhone ?? (phoneRevalidationRequested ? undefined : enrichment.phone ?? undefined),
             contactPageUrl: enrichment.contactPageUrl ?? undefined,
             businessName: enrichment.businessName ?? undefined,
             enrichmentStatus: enrichment.enrichmentStatus,
@@ -116,10 +115,10 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
           });
         }
 
-        if (phoneIdentityChanged && lead.phone) {
+        if (phoneRevalidationRequested && lead.phone && (!revalidatedPhone || phoneIdentityChanged)) {
           await tx.contact.updateMany({
             where: { leadId, type: "phone", value: lead.phone, source: { in: ENRICHMENT_CONTACT_SOURCES } },
-            data: { isPrimary: false, verificationStatus: "rejected_identity_mismatch" },
+            data: { isPrimary: false, verificationStatus: revalidatedPhone ? "rejected_identity_mismatch" : "unverified_identity" },
           });
         }
 
@@ -158,21 +157,25 @@ export async function enrichLeadEmail(prisma: PrismaClient, leadId: number, opti
             leadId,
             type: activityType,
             summary,
-            metadata: { previousEmail: emailIdentityChanged ? currentEmail : null, email, discoveredEmail, emailProtected, previousPhone: phoneIdentityChanged ? currentPhone : null, phone: revalidatedPhone ?? currentPhone, phoneRevalidated, phoneIdentityChanged, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null, forceRevalidate: Boolean(options.forceRevalidate) },
+            metadata: { previousEmail: emailIdentityChanged ? currentEmail : null, email, discoveredEmail, emailProtected, previousPhone: phoneIdentityChanged ? currentPhone : null, phone: revalidatedPhone ?? (phoneRevalidationRequested ? null : currentPhone), phoneRevalidated, phoneIdentityChanged, phoneRevalidationRequested, attempts, status: state.emailEnrichmentStatus, reason: state.emailEnrichmentReason, nextRetryAt: state.nextEmailEnrichmentAt?.toISOString() ?? null, contactPageUrl: enrichment.contactPageUrl ?? null, forceRevalidate: Boolean(options.forceRevalidate), enrichmentNotes: enrichment.enrichmentNotes },
           },
         });
-        if (phoneRevalidated) {
+        if (phoneRevalidationRequested) {
           await tx.activity.create({
             data: {
               leadId,
-              type: phoneIdentityChanged ? "phone_identity_replaced" : "phone_identity_revalidated",
-              summary: phoneIdentityChanged ? `Phone replaced from identity-matched local-business listing: ${revalidatedPhone}` : `Phone revalidated against identity-matched local-business listing: ${revalidatedPhone}`,
-              metadata: { previousPhone: phoneIdentityChanged ? currentPhone : null, phone: revalidatedPhone },
+              type: revalidatedPhone ? phoneIdentityChanged ? "phone_identity_replaced" : "phone_identity_revalidated" : "phone_identity_unverified",
+              summary: revalidatedPhone
+                ? phoneIdentityChanged
+                  ? `Phone replaced from identity-matched local-business listing: ${revalidatedPhone}`
+                  : `Phone revalidated against identity-matched local-business listing: ${revalidatedPhone}`
+                : "Enrichment-sourced phone could not be independently revalidated and was excluded from email identity matching",
+              metadata: { previousPhone: phoneIdentityChanged || !revalidatedPhone ? currentPhone : null, phone: revalidatedPhone ?? null },
             },
           });
         }
       });
-      return { leadId, email, discoveredEmail, emailProtected, phone: revalidatedPhone ?? currentPhone, found: Boolean(email), alreadyPresent: false, revalidated: Boolean(options.forceRevalidate), identityChanged: emailIdentityChanged, phoneRevalidated, phoneIdentityChanged, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt };
+      return { leadId, email, discoveredEmail, emailProtected, phone: revalidatedPhone ?? (phoneRevalidationRequested ? null : currentPhone), found: Boolean(email), alreadyPresent: false, revalidated: Boolean(options.forceRevalidate), identityChanged: emailIdentityChanged, phoneRevalidated, phoneIdentityChanged, phoneRevalidationRequested, status: state.emailEnrichmentStatus, attempts, nextRetryAt: state.nextEmailEnrichmentAt, enrichmentNotes: enrichment.enrichmentNotes };
     } catch (error) {
       const state = retryState(attempts);
       const text = error instanceof Error ? error.message : String(error);
