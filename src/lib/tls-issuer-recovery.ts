@@ -17,6 +17,11 @@ type CachedIssuerChain = {
   expiresAt: number;
 };
 
+type PeerCertificateLike = {
+  raw?: Buffer;
+  issuerCertificate?: PeerCertificateLike;
+};
+
 const issuerCache = new Map<string, CachedIssuerChain>();
 const MAX_AIA_CERT_BYTES = 512 * 1024;
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
@@ -83,7 +88,7 @@ function certificateIsCurrent(cert: X509Certificate) {
 
 function parseAiaIssuerUrls(cert: X509Certificate): string[] {
   const values: string[] = [];
-  for (const line of cert.infoAccess.split(/\r?\n/)) {
+  for (const line of (cert.infoAccess ?? "").split(/\r?\n/)) {
     if (!/CA Issuers/i.test(line)) continue;
     const match = line.match(/URI:(.+)$/i);
     if (!match?.[1]) continue;
@@ -194,13 +199,13 @@ async function presentedChain(hostname: string, port: number): Promise<X509Certi
         if (!peer?.raw?.length) throw new Error("Server did not present a certificate");
         const chain: X509Certificate[] = [];
         const seen = new Set<string>();
-        let current: typeof peer | undefined = peer;
+        let current: PeerCertificateLike | undefined = peer as PeerCertificateLike;
         while (current?.raw?.length) {
           const cert = new X509Certificate(current.raw);
           if (seen.has(cert.fingerprint256)) break;
           seen.add(cert.fingerprint256);
           chain.push(cert);
-          const next = current.issuerCertificate;
+          const next: PeerCertificateLike | undefined = current.issuerCertificate;
           if (!next?.raw?.length || next === current) break;
           current = next;
         }
@@ -252,7 +257,7 @@ async function recoverIssuerChain(target: URL): Promise<string[]> {
   throw new Error("Recovered issuer chain did not terminate at a Node-trusted CA");
 }
 
-async function verifiedHttpsText(url: string, ca: string[], headers: HeadersInit | undefined, signal: AbortSignal | null | undefined, redirects = 0): Promise<ResearchFetchResponse> {
+async function verifiedHttpsText(url: string, ca: string[], headers: RequestInit["headers"], signal: AbortSignal | null | undefined, redirects = 0): Promise<ResearchFetchResponse> {
   if (redirects > 5) throw new Error("Too many HTTPS redirects during issuer-recovery fetch");
   const target = new URL(url);
   if (target.protocol !== "https:") {
