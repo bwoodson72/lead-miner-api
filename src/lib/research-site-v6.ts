@@ -1,4 +1,9 @@
-import { fetchWebsiteResearchPacket, type WebsiteResearchPacket } from "./research-site.js";
+import {
+  extractWebsitePacket,
+  fetchWebsiteResearchPacket,
+  mergeWebsitePackets,
+  type WebsiteResearchPacket,
+} from "./research-site.js";
 
 export type RepresentativePageType = "service" | "location" | "about" | "other";
 
@@ -25,12 +30,18 @@ export type BusinessAssetResearchPacket = WebsiteResearchPacket & {
     locationUrlsObserved: number;
     aboutUrlsObserved: number;
     architectureEvidenceComplete: boolean;
+    crawlerAccess: {
+      initialFetchSucceeded: boolean;
+      browserFallbackAttempted: boolean;
+      browserFallbackSucceeded: boolean;
+      visitorReachabilityEstablished: false;
+    };
     warning: string;
   };
   representativePages: RepresentativePageSummary[];
 };
 
-const COVERAGE_WARNING = "Representative crawling samples a bounded set of same-site pages and sitemap URLs. It improves evidence about site depth but is not a complete crawl. Absence from this packet is not proof that a page, service, location, or capability does not exist.";
+const COVERAGE_WARNING = "Representative crawling samples a bounded set of same-site pages and sitemap URLs. It improves evidence about site depth but is not a complete crawl. A crawler fetch failure means only that Lead Miner's automated crawler could not inspect the page; it is not evidence that the website is down, offline, unreachable, or inaccessible to normal visitors. Absence from this packet is not proof that a page, service, location, or capability does not exist.";
 
 function normalizeHost(value: string) {
   try { return new URL(value).hostname.toLowerCase().replace(/^www\./, ""); }
@@ -39,6 +50,15 @@ function normalizeHost(value: string) {
 
 function sameHost(a: string, b: string) {
   return Boolean(normalizeHost(a) && normalizeHost(a) === normalizeHost(b));
+}
+
+function browserHeaders() {
+  return {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+  };
 }
 
 function decodeHtml(value: string) {
@@ -78,7 +98,7 @@ async function fetchText(url: string, timeoutMs = 8_000): Promise<{ status: numb
     const response = await fetch(url, {
       signal: controller.signal,
       redirect: "follow",
-      headers: { "User-Agent": "LeadMinerResearch/1.2", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+      headers: browserHeaders(),
     });
     if (!response.ok) return null;
     return { status: response.status, finalUrl: response.url || url, text: await response.text() };
@@ -87,6 +107,73 @@ async function fetchText(url: string, timeoutMs = 8_000): Promise<{ status: numb
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function rootVariants(input: string): string[] {
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, "");
+    const path = `${url.pathname || "/"}${url.search}`;
+    return [...new Set([
+      input,
+      `https://${host}${path}`,
+      `https://www.${host}${path}`,
+      `http://${host}${path}`,
+      `http://www.${host}${path}`,
+    ])];
+  } catch {
+    return [input];
+  }
+}
+
+async function fetchLandingWithBrowserFallback(url: string): Promise<{
+  landing: WebsiteResearchPacket;
+  initialFetchSucceeded: boolean;
+  browserFallbackAttempted: boolean;
+  browserFallbackSucceeded: boolean;
+}> {
+  const initial = await fetchWebsiteResearchPacket(url);
+  if (initial.finalUrl && !initial.fetchError) {
+    return {
+      landing: initial,
+      initialFetchSucceeded: true,
+      browserFallbackAttempted: false,
+      browserFallbackSucceeded: false,
+    };
+  }
+
+  for (const candidate of rootVariants(url)) {
+    const response = await fetchText(candidate, 12_000);
+    if (!response) continue;
+
+    const landing = extractWebsitePacket(response.text, url, response.finalUrl, response.status);
+    const contactUrls = [...new Set(
+      landing.discoveredPages
+        .filter((page) => page.type === "contact" && sameHost(page.url, response.finalUrl))
+        .map((page) => page.url)
+        .filter((pageUrl) => pageUrl !== response.finalUrl),
+    )].slice(0, 4);
+
+    const contactPages = (await Promise.all(contactUrls.map(async (contactUrl) => {
+      const contactResponse = await fetchText(contactUrl, 8_000);
+      if (!contactResponse || !sameHost(contactResponse.finalUrl, response.finalUrl)) return null;
+      return extractWebsitePacket(contactResponse.text, contactUrl, contactResponse.finalUrl, contactResponse.status);
+    }))).filter((page): page is WebsiteResearchPacket => Boolean(page));
+
+    return {
+      landing: mergeWebsitePackets(landing, contactPages),
+      initialFetchSucceeded: false,
+      browserFallbackAttempted: true,
+      browserFallbackSucceeded: true,
+    };
+  }
+
+  return {
+    landing: initial,
+    initialFetchSucceeded: false,
+    browserFallbackAttempted: true,
+    browserFallbackSucceeded: false,
+  };
 }
 
 function sitemapLocs(xml: string, baseUrl: string): string[] {
@@ -159,7 +246,7 @@ function representativeCandidates(landing: WebsiteResearchPacket, sitemapUrls: s
 async function summarizePage(row: { url: string; type: RepresentativePageType }): Promise<RepresentativePageSummary> {
   const response = await fetchText(row.url);
   if (!response || !sameHost(response.finalUrl, row.url)) {
-    return { url: row.url, type: row.type, fetchStatus: null, fetchError: "Fetch failed or redirected off-site", title: null, h1: [], h2: [], wordCount: 0, hasForm: false, pageText: "" };
+    return { url: row.url, type: row.type, fetchStatus: null, fetchError: "Crawler could not inspect page or it redirected off-site", title: null, h1: [], h2: [], wordCount: 0, hasForm: false, pageText: "" };
   }
 
   const html = response.text;
@@ -185,7 +272,15 @@ async function summarizePage(row: { url: string; type: RepresentativePageType })
 }
 
 export async function fetchBusinessAssetResearchPacket(url: string): Promise<BusinessAssetResearchPacket> {
-  const landing = await fetchWebsiteResearchPacket(url);
+  const fetchedLanding = await fetchLandingWithBrowserFallback(url);
+  const landing = fetchedLanding.landing;
+  const crawlerAccess = {
+    initialFetchSucceeded: fetchedLanding.initialFetchSucceeded,
+    browserFallbackAttempted: fetchedLanding.browserFallbackAttempted,
+    browserFallbackSucceeded: fetchedLanding.browserFallbackSucceeded,
+    visitorReachabilityEstablished: false as const,
+  };
+
   if (!landing.finalUrl || landing.fetchError) {
     return {
       ...landing,
@@ -198,6 +293,7 @@ export async function fetchBusinessAssetResearchPacket(url: string): Promise<Bus
         locationUrlsObserved: landing.architecture.locationPages.length,
         aboutUrlsObserved: landing.architecture.aboutPages.length,
         architectureEvidenceComplete: false,
+        crawlerAccess,
         warning: COVERAGE_WARNING,
       },
       representativePages: [],
@@ -224,6 +320,7 @@ export async function fetchBusinessAssetResearchPacket(url: string): Promise<Bus
       locationUrlsObserved: observed.filter((value) => classifyUrl(value) === "location").length,
       aboutUrlsObserved: observed.filter((value) => classifyUrl(value) === "about").length,
       architectureEvidenceComplete: false,
+      crawlerAccess,
       warning: COVERAGE_WARNING,
     },
     representativePages,
