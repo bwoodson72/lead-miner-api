@@ -65,7 +65,23 @@ async function reusableResearch(prisma: PrismaClient, lead: any, settings: any, 
   if (!priorJob) return null;
   const assessment = await prisma.leadAssetAssessment.findFirst({ where: { leadId: lead.id, researchVersion: RESEARCH_VERSION }, orderBy: { createdAt: "desc" }, include: { findings: { orderBy: [{ significance: "desc" }, { confidence: "desc" }] } } });
   if (!assessment) return null;
-  const result: ResearchResult = { decision: assessment.decision as ResearchResult["decision"], assetStrength: assessment.assetStrength as ResearchResult["assetStrength"], dimensions: assessment.dimensions as ResearchResult["dimensions"], findings: assessment.findings.map((f) => ({ category: f.category as ResearchResult["findings"][number]["category"], title: f.title, evidence: f.evidence, assetCapability: f.assetCapability, confidence: f.confidence, significance: f.significance as ResearchResult["findings"][number]["significance"], evidenceSources: f.evidenceSources as ResearchResult["findings"][number]["evidenceSources"] })), researchSummary: assessment.researchSummary, decisionReason: assessment.decisionReason, confidence: assessment.confidence };
+  const result: ResearchResult = {
+    decision: assessment.decision as ResearchResult["decision"],
+    assetStrength: assessment.assetStrength as ResearchResult["assetStrength"],
+    dimensions: assessment.dimensions as unknown as ResearchResult["dimensions"],
+    findings: assessment.findings.map((finding) => ({
+      category: finding.category as ResearchResult["findings"][number]["category"],
+      title: finding.title,
+      evidence: finding.evidence,
+      assetCapability: finding.assetCapability,
+      confidence: finding.confidence,
+      significance: finding.significance as ResearchResult["findings"][number]["significance"],
+      evidenceSources: finding.evidenceSources as unknown as ResearchResult["findings"][number]["evidenceSources"],
+    })),
+    researchSummary: assessment.researchSummary,
+    decisionReason: assessment.decisionReason,
+    confidence: assessment.confidence,
+  };
   await prisma.activity.create({ data: { leadId: lead.id, type: "research_reused", summary: "Skipped duplicate AI research because the normalized evidence packet is unchanged", metadata: { packetHash, previousJobId: priorJob.id, assessmentId: assessment.id, researchVersion: RESEARCH_VERSION } } });
   return { result, priorityScore: lead.priorityScore, draft: null, preparation, invalidatedDrafts: 0, assessmentId: assessment.id, reused: true, packetHash };
 }
@@ -90,7 +106,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
         const assessment = await tx.leadAssetAssessment.create({ data: { leadId, decision: result.decision, assetStrength: result.assetStrength, dimensions: result.dimensions, performanceAssessment, siteCoverage: website.siteCoverage, researchSummary: result.researchSummary, decisionReason: result.decisionReason, confidence: result.confidence, model, researchVersion: RESEARCH_VERSION } });
         assessmentId = assessment.id;
         if (result.findings.length) await tx.leadFinding.createMany({ data: result.findings.map((finding) => ({ assessmentId: assessment.id, category: finding.category, title: finding.title, evidence: finding.evidence, assetCapability: finding.assetCapability, confidence: finding.confidence, significance: finding.significance, evidenceSources: finding.evidenceSources })) });
-        await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.decisionReason, priorityScore: null, priorityBreakdown: null, primaryOutreachAngle: null, primaryOutreachAngleReason: null, primaryOutreachAngleConfidence: null, primaryOutreachFindingId: null, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date(), assetStrength: result.assetStrength, assetAssessment: { dimensions: result.dimensions, performanceAssessment, siteCoverage: website.siteCoverage, findings: result.findings, confidence: result.confidence } } });
+        await tx.lead.update({ where: { id: leadId }, data: { status: nextStatus, qualificationDecision: result.decision, qualificationReason: result.decisionReason, priorityScore: null, priorityBreakdown: {}, primaryOutreachAngle: null, primaryOutreachAngleReason: null, primaryOutreachAngleConfidence: null, primaryOutreachFindingId: null, researchSummary: result.researchSummary, researchVersion: RESEARCH_VERSION, lastResearchedAt: new Date(), assetStrength: result.assetStrength, assetAssessment: { dimensions: result.dimensions, performanceAssessment, siteCoverage: website.siteCoverage, findings: result.findings, confidence: result.confidence } } });
         await tx.activity.create({ data: { leadId, type: "research_completed", summary: `${result.decision}: ${result.decisionReason}`, metadata: { assetStrength: result.assetStrength, confidence: result.confidence, model, researchVersion: RESEARCH_VERSION, packetHash, preparationStatus: preparation.status, enrichmentAttempted: preparation.enrichmentAttempted, strongPerformanceSignal: performanceAssessment.strongPerformanceSignal, representativePagesFetched: website.siteCoverage.representativePagesFetched } } });
         await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, packetHash, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
       });
@@ -109,7 +125,10 @@ export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10
   const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
   const leads = await prisma.lead.findMany({ where: { email: { not: null }, status: { in: ["new", "research_pending"] }, lastResearchedAt: null, aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } } }, orderBy: { createdAt: "asc" }, take: safeLimit, select: { id: true } });
   const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number | null; draftId?: number; error?: string }> = [];
-  for (const lead of leads) { try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); } catch (error) { results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); } }
+  for (const lead of leads) {
+    try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); }
+    catch (error) { results.push({ id: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); }
+  }
   return results;
 }
 
@@ -139,17 +158,52 @@ const assetAssessmentInclude = { orderBy: { createdAt: "desc" as const }, take: 
 
 export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   registerEnrichmentRoutes(app, prisma);
-  app.get("/api/leads/:id/research", async (req, res) => { const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; } const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } }); if (!lead) { res.status(404).json({ error: "Lead not found" }); return; } res.json(lead); });
-  app.post("/api/leads/:id/research", async (req, res) => {
-    const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
-    try { const processed = await processLeadResearch(prisma, id); res.json({ preparation: processed.preparation, invalidatedDrafts: processed.invalidatedDrafts, assessmentId: processed.assessmentId, reused: processed.reused ?? false, packetHash: processed.packetHash, lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, outreachMessages: { orderBy: { generatedAt: "desc" } } } }) }); }
-    catch (error) { if (error instanceof ResearchPreparationError) { const preparation = error.preparation; const status = preparation.status === "deferred" ? 409 : preparation.status === "missing" ? 404 : 422; console.warn(`[Research] Lead ${id} blocked before AI — status=${preparation.status}, reason=${error.message}`); res.status(status).json({ error: error.message, stage: "preparation", preparation }); return; } const message = error instanceof Error ? error.message : String(error); const status = statusForResearchError(message); console.error(`[Research] Lead ${id} failed — stage=research, status=${status}, error=${message}`, error); res.status(status).json({ error: message, stage: "research" }); }
+
+  app.get("/api/leads/:id/research", async (req, res) => {
+    const id = Number(req.params["id"]);
+    if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
+    const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } });
+    if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+    res.json(lead);
   });
+
+  app.post("/api/leads/:id/research", async (req, res) => {
+    const id = Number(req.params["id"]);
+    if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
+    try {
+      const processed = await processLeadResearch(prisma, id);
+      res.json({ preparation: processed.preparation, invalidatedDrafts: processed.invalidatedDrafts, assessmentId: processed.assessmentId, reused: processed.reused ?? false, packetHash: processed.packetHash, lead: await prisma.lead.findUnique({ where: { id }, include: { problems: true, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, outreachMessages: { orderBy: { generatedAt: "desc" } } } }) });
+    } catch (error) {
+      if (error instanceof ResearchPreparationError) {
+        const preparation = error.preparation;
+        const status = preparation.status === "deferred" ? 409 : preparation.status === "missing" ? 404 : 422;
+        console.warn(`[Research] Lead ${id} blocked before AI — status=${preparation.status}, reason=${error.message}`);
+        res.status(status).json({ error: error.message, stage: "preparation", preparation });
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const status = statusForResearchError(message);
+      console.error(`[Research] Lead ${id} failed — stage=research, status=${status}, error=${message}`, error);
+      res.status(status).json({ error: message, stage: "research" });
+    }
+  });
+
   app.post("/api/leads/bulk-research", async (req, res) => {
     const requested = Array.isArray(req.body?.ids) ? Array.from(new Set(req.body.ids.filter((id: unknown) => Number.isInteger(id) && Number(id) > 0) as number[])) : [];
     if (requested.length > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Bulk research is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
-    const settings = await getAppSettings(prisma); const batchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.bulkResearchMax); const leadIds = requested.length ? requested.slice(0, batchLimit) : (await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, lastResearchedAt: null }, orderBy: { createdAt: "asc" }, take: batchLimit, select: { id: true } })).map((lead) => lead.id);
-    const results = await processPreparedResearchBatch(prisma, leadIds); const alreadyHadEmail = results.filter((r) => r.preparation.alreadyHadEmail).length; const enrichmentAttempted = results.filter((r) => r.preparation.enrichmentAttempted).length; const emailsDiscovered = results.filter((r) => r.preparation.status === "email_found").length; const enrichmentExhausted = results.filter((r) => r.preparation.status === "exhausted").length; const enrichmentDeferred = results.filter((r) => r.preparation.status === "deferred").length; const enrichmentFailed = results.filter((r) => r.preparation.status === "failed" || r.preparation.status === "missing").length; const researched = results.filter((r) => r.success).length; const researchFailed = results.filter((r) => r.preparation.ready && !r.success).length; const skippedNoEmail = results.filter((r) => !r.preparation.ready && r.preparation.status !== "missing").length;
+    const settings = await getAppSettings(prisma);
+    const batchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.bulkResearchMax);
+    const leadIds = requested.length ? requested.slice(0, batchLimit) : (await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, lastResearchedAt: null }, orderBy: { createdAt: "asc" }, take: batchLimit, select: { id: true } })).map((lead) => lead.id);
+    const results = await processPreparedResearchBatch(prisma, leadIds);
+    const alreadyHadEmail = results.filter((r) => r.preparation.alreadyHadEmail).length;
+    const enrichmentAttempted = results.filter((r) => r.preparation.enrichmentAttempted).length;
+    const emailsDiscovered = results.filter((r) => r.preparation.status === "email_found").length;
+    const enrichmentExhausted = results.filter((r) => r.preparation.status === "exhausted").length;
+    const enrichmentDeferred = results.filter((r) => r.preparation.status === "deferred").length;
+    const enrichmentFailed = results.filter((r) => r.preparation.status === "failed" || r.preparation.status === "missing").length;
+    const researched = results.filter((r) => r.success).length;
+    const researchFailed = results.filter((r) => r.preparation.ready && !r.success).length;
+    const skippedNoEmail = results.filter((r) => !r.preparation.ready && r.preparation.status !== "missing").length;
     res.json({ selected: requested.length || leadIds.length, selectedForThisBatch: leadIds.length, cap: batchLimit, alreadyHadEmail, enrichmentAttempted, emailsDiscovered, enrichmentExhausted, enrichmentDeferred, enrichmentFailed, researchEligible: results.filter((r) => r.preparation.ready).length, researched, researchFailed, skippedNoEmail, processed: results.length, results });
   });
 }
