@@ -17,6 +17,7 @@ export type ResearchPreparationResult = {
   alreadyHadEmail: boolean;
   enrichmentAttempted: boolean;
   reason?: string | null;
+  enrichmentNotes?: string | null;
   nextRetryAt?: Date | null;
 };
 
@@ -46,6 +47,7 @@ export async function prepareLeadForResearch(
     select: {
       id: true,
       email: true,
+      enrichmentNotes: true,
       emailEnrichmentStatus: true,
       emailEnrichmentReason: true,
       nextEmailEnrichmentAt: true,
@@ -84,6 +86,7 @@ export async function prepareLeadForResearch(
       alreadyHadEmail: false,
       enrichmentAttempted: false,
       reason: lead.emailEnrichmentReason,
+      enrichmentNotes: lead.enrichmentNotes,
     };
   }
 
@@ -101,12 +104,11 @@ export async function prepareLeadForResearch(
       alreadyHadEmail: false,
       enrichmentAttempted: false,
       reason: lead.emailEnrichmentReason,
+      enrichmentNotes: lead.enrichmentNotes,
       nextRetryAt: lead.nextEmailEnrichmentAt,
     };
   }
 
-  // A `found` state with no Lead.email is inconsistent. Automated work stops so
-  // it cannot spend credits silently; a manual research action may force repair.
   if (!forceEmailEnrichment && lead.emailEnrichmentStatus === "found") {
     return {
       leadId,
@@ -116,6 +118,7 @@ export async function prepareLeadForResearch(
       alreadyHadEmail: false,
       enrichmentAttempted: false,
       reason: "Email enrichment is marked found but the lead has no email address",
+      enrichmentNotes: lead.enrichmentNotes,
     };
   }
 
@@ -129,6 +132,7 @@ export async function prepareLeadForResearch(
         email: result.email,
         alreadyHadEmail: false,
         enrichmentAttempted: true,
+        enrichmentNotes: result.enrichmentNotes ?? null,
       };
     }
 
@@ -140,7 +144,8 @@ export async function prepareLeadForResearch(
         email: null,
         alreadyHadEmail: false,
         enrichmentAttempted: true,
-        reason: "Email enrichment exhausted with no usable address",
+        reason: "Email enrichment exhausted with no identity-verified usable address",
+        enrichmentNotes: result.enrichmentNotes ?? null,
       };
     }
 
@@ -152,6 +157,7 @@ export async function prepareLeadForResearch(
       alreadyHadEmail: false,
       enrichmentAttempted: true,
       reason: "Email enrichment did not produce an address; retry is scheduled",
+      enrichmentNotes: result.enrichmentNotes ?? null,
       nextRetryAt: result.nextRetryAt ?? null,
     };
   } catch (error) {
