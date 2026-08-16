@@ -1,10 +1,7 @@
-import { Resend } from "resend";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { getEnv } from "./env.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
-import { retryTransient, looksTransientProviderError } from "./provider-retry.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import {
   getSendIneligibilityReason,
@@ -22,40 +19,24 @@ export function nextFollowUpDate(delays: unknown, sequenceNumber: number): Date 
   return delay ? new Date(Date.now() + delay * DAY_MS) : null;
 }
 
-async function providerSend(prisma: PrismaClient, message: any, settings: any, key: string) {
-  if (settings.emailProvider === "gmail") {
-    const thread = await prisma.emailThread.findFirst({ where: { leadId: message.leadId, provider: "gmail", status: "open" }, orderBy: { updatedAt: "desc" } });
-    const prior = await prisma.outreachMessage.findFirst({ where: { leadId: message.leadId, status: "sent", providerMessageId: { not: null } }, orderBy: { sequenceNumber: "desc" } });
-    let inReplyToMessageId: string | null = null;
-    if (prior?.providerMessageId) {
-      try { inReplyToMessageId = (await getGmailMessage(prior.providerMessageId)).rfcMessageId; } catch { inReplyToMessageId = null; }
-    }
-    const result = await sendGmailMessage({
-      fromName: settings.senderName,
-      fromEmail: settings.senderEmail,
-      to: message.lead.email,
-      subject: message.subject,
-      bodyText: message.bodyText,
-      messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
-      threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
-      inReplyToMessageId,
-    });
-    return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
+async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
+  const thread = await prisma.emailThread.findFirst({ where: { leadId: message.leadId, provider: "gmail", status: "open" }, orderBy: { updatedAt: "desc" } });
+  const prior = await prisma.outreachMessage.findFirst({ where: { leadId: message.leadId, status: "sent", providerMessageId: { not: null } }, orderBy: { sequenceNumber: "desc" } });
+  let inReplyToMessageId: string | null = null;
+  if (prior?.providerMessageId) {
+    try { inReplyToMessageId = (await getGmailMessage(prior.providerMessageId)).rfcMessageId; } catch { inReplyToMessageId = null; }
   }
-
-  const env = getEnv();
-  if (!env.RESEND_API_KEY) throw new Error("RESEND_API_KEY is not configured");
-  const resend = new Resend(env.RESEND_API_KEY);
-  const result = await retryTransient(async () => {
-    const attempt = await resend.emails.send(
-      { from: `${settings.senderName} <${settings.senderEmail}>`, to: message.lead.email, subject: message.subject, text: message.bodyText },
-      { idempotencyKey: key },
-    );
-    if (attempt.error) throw new Error(attempt.error.message);
-    if (!attempt.data?.id) throw new Error("Email provider returned no message id");
-    return attempt;
-  }, "Resend", looksTransientProviderError);
-  return { providerMessageId: result.data!.id, providerThreadId: null, reconciled: false };
+  const result = await sendGmailMessage({
+    fromName: settings.senderName,
+    fromEmail: settings.senderEmail,
+    to: message.lead.email,
+    subject: message.subject,
+    bodyText: message.bodyText,
+    messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
+    threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
+    inReplyToMessageId,
+  });
+  return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
 }
 
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
@@ -88,7 +69,7 @@ export async function claimApprovedMessage(
   throw new Error(`Message is not available to send (status: ${current?.status ?? "missing"})`);
 }
 
-async function completeSend(prisma: PrismaClient, message: any, settings: any, provider: { providerMessageId: string; providerThreadId: string | null; reconciled: boolean }) {
+async function completeSend(prisma: PrismaClient, message: any, provider: { providerMessageId: string; providerThreadId: string | null; reconciled: boolean }) {
   const sequence = await getActiveOutreachSequence(prisma);
   const sentAt = new Date();
   const followUpDate = nextFollowUpDate(sequence.delaysDays, message.sequenceNumber);
@@ -100,11 +81,11 @@ async function completeSend(prisma: PrismaClient, message: any, settings: any, p
     if (provider.providerThreadId) {
       await tx.emailThread.upsert({
         where: { providerThreadId: provider.providerThreadId },
-        update: { leadId: message.leadId, provider: settings.emailProvider, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
-        create: { leadId: message.leadId, provider: settings.emailProvider, providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
+        update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
+        create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: "open", lastOutboundAt: sentAt },
       });
     }
-    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${message.sequenceNumber - 1}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: settings.emailProvider, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey } } });
+    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${message.sequenceNumber - 1}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey } } });
     return updated;
   });
 }
@@ -116,8 +97,8 @@ async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
   const key = message.idempotencyKey ?? makeOutreachIdempotencyKey(message.id);
 
   try {
-    const provider = await providerSend(prisma, message, settings, key);
-    return await completeSend(prisma, { ...message, idempotencyKey: key }, settings, provider);
+    const provider = await sendViaGmail(prisma, message, settings);
+    return await completeSend(prisma, { ...message, idempotencyKey: key }, provider);
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendError: text } }).catch(() => undefined);
