@@ -180,10 +180,10 @@ function applyCrawlerFailureSafety(result: ResearchResult, website: BusinessAsse
     return { ...result, findings };
   }
 
-  const unknownDimension = (label: string) => ({
-    rating: "unknown" as const,
+  const unknownDimension = (label: string): ResearchResult["dimensions"]["demandAlignment"] => ({
+    rating: "unknown",
     evidence: `Lead Miner's crawler could not inspect enough current website content to assess ${label} reliably. This is crawler uncertainty, not evidence that visitors cannot access the site.`,
-    evidenceSources: ["site_coverage"] as const,
+    evidenceSources: ["site_coverage"],
     confidence: 0.2,
   });
 
