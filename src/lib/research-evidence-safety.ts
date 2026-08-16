@@ -5,6 +5,8 @@ export const RESEARCH_EVIDENCE_SOURCES = [
   "cta",
   "contact_signal",
   "architecture",
+  "site_coverage",
+  "representative_page",
   "technology",
   "performance",
   "lead_data",
