@@ -61,7 +61,6 @@ export async function processDueFollowUps(prisma: PrismaClient, limit = 25) {
 
 async function syncLeadReply(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
-  if (settings.emailProvider !== "gmail") throw new Error("Reply sync requires Gmail provider");
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { outreachMessages: { where: { status: "sent", providerMessageId: { not: null } }, orderBy: { sequenceNumber: "asc" } }, emailThreads: { where: { provider: "gmail", status: "open" }, orderBy: { updatedAt: "desc" }, take: 1 } } });
   if (!lead?.outreachMessages.length) return null;
   const canonicalThread = lead.emailThreads[0];
