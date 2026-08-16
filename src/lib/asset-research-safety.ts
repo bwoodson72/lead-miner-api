@@ -15,6 +15,7 @@ export type AssetFinding = {
 };
 
 const UNVERIFIED_DOM_SOURCES = new Set<ResearchEvidenceSource>(["dom_heading", "dom_text"]);
+const UNSUPPORTED_VISITOR_REACHABILITY = /\b(?:website|site|homepage|page|domain)\b[\s\S]{0,80}\b(?:unreachable|offline|down|unavailable|inaccessible|cannot be accessed|can't be accessed|not reachable|not accessible)\b|\b(?:unreachable|offline|down|unavailable|inaccessible|not reachable|not accessible)\b[\s\S]{0,80}\b(?:website|site|homepage|page|domain)\b/i;
 
 function lowerSignificance(value: AssetFinding["significance"], ceiling: "low" | "medium") {
   if (ceiling === "low") return "low" as const;
@@ -25,8 +26,24 @@ function domOnly(finding: AssetFinding) {
   return finding.evidenceSources.length > 0 && finding.evidenceSources.every((source) => UNVERIFIED_DOM_SOURCES.has(source));
 }
 
+export function containsUnsupportedVisitorReachabilityClaim(value: string | null | undefined) {
+  return Boolean(value && UNSUPPORTED_VISITOR_REACHABILITY.test(value));
+}
+
+export function isUnsupportedCrawlerReachabilityFinding(finding: AssetFinding) {
+  const claim = `${finding.category} ${finding.title} ${finding.evidence} ${finding.assetCapability}`;
+  return containsUnsupportedVisitorReachabilityClaim(claim);
+}
+
 export function applyAssetFindingSafety<T extends AssetFinding>(finding: T): T {
   const claim = `${finding.category} ${finding.title} ${finding.evidence} ${finding.assetCapability}`;
+  if (isUnsupportedCrawlerReachabilityFinding(finding)) {
+    return {
+      ...finding,
+      confidence: Math.min(finding.confidence, 0.1),
+      significance: lowerSignificance(finding.significance, "low"),
+    };
+  }
   if (containsUnsupportedFormAbsenceClaim(claim)) {
     return {
       ...finding,
