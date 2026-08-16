@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { registerCrmOperationsRoutes } from "./crm-operations-routes.js";
+import { registerSpecCompatibilityRoutes } from "./spec-compat-routes.js";
 
 function pct(numerator:number,denominator:number){return denominator>0?Math.round((numerator/denominator)*1000)/10:0;}
 function money(value:number){return Math.round(value*100000)/100000;}
@@ -9,6 +10,7 @@ function cohortKey(date:Date|null|undefined){return date?`${date.getUTCFullYear(
 
 export function registerAnalyticsRoutes(app:Express,prisma:PrismaClient){
  registerCrmOperationsRoutes(app,prisma);
+ registerSpecCompatibilityRoutes(app,prisma);
  app.get("/api/analytics/summary",async(_req,res)=>{try{
   const[leads,sentMessages,jobs]=await Promise.all([
    prisma.lead.findMany({where:{outreachMessages:{some:{status:"sent"}}},select:{id:true,keyword:true,category:true,priorityScore:true,primaryOutreachAngle:true,replyStatus:true,lastReplyAt:true,status:true,outreachMessages:{where:{status:"sent"},select:{kind:true,sequenceNumber:true,angle:true,sentAt:true}},assetAssessments:{orderBy:{createdAt:"desc"},take:1,select:{findings:{select:{category:true,significance:true,confidence:true}}}}}}),
@@ -26,4 +28,14 @@ export function registerAnalyticsRoutes(app:Express,prisma:PrismaClient){
   const sentByLead=new Map<number,Date>();for(const m of sentMessages){if(!m.sentAt)continue;const prior=sentByLead.get(m.leadId);if(!prior||m.sentAt<prior)sentByLead.set(m.leadId,m.sentAt);}const cohortMap=new Map<string,{contacted:number;replied:number;meetings:number;won:number}>();for(const lead of leads){const key=cohortKey(sentByLead.get(lead.id));const row=cohortMap.get(key)??{contacted:0,replied:0,meetings:0,won:0};row.contacted++;if(lead.replyStatus||lead.lastReplyAt)row.replied++;if(["call_scheduled","proposal_sent","won"].includes(lead.status))row.meetings++;if(lead.status==="won")row.won++;cohortMap.set(key,row);}const cohorts=Array.from(cohortMap.entries()).map(([key,row])=>({key,...row,replyRate:pct(row.replied,row.contacted),meetingRate:pct(row.meetings,row.contacted),winRate:pct(row.won,row.contacted)})).sort((a,b)=>b.key.localeCompare(a.key));
   res.json({totals:{contactedLeads:leads.length,messagesSent:sentMessages.length,replies:replied.length,interested:interested.length,meetings:meetings.length,wins:wins.length,bounces:bounced.length,unsubscribes:unsubscribed.length,replyRate:pct(replied.length,leads.length),interestedRate:pct(interested.length,leads.length),meetingRate:pct(meetings.length,leads.length),winRate:pct(wins.length,leads.length),bounceRate:pct(bounced.length,leads.length),unsubscribeRate:pct(unsubscribed.length,leads.length)},ai:{...ai,estimatedCost:money(ai.estimatedCost),costPerAnalyzedLead:analyzedLeadIds.size?money(ai.estimatedCost/analyzedLeadIds.size):0,costPerContactedLead:leads.length?money(ai.estimatedCost/leads.length):0,costPerReply:replied.length?money(ai.estimatedCost/replied.length):0,costPerMeeting:meetings.length?money(ai.estimatedCost/meetings.length):0,costPerWin:wins.length?money(ai.estimatedCost/wins.length):0,byModel:Array.from(byModelMap.entries()).map(([model,row])=>({model,...row,estimatedCost:money(row.estimatedCost)}))},byNiche:makeBreakdown(l=>l.category||l.keyword),byKeyword:makeBreakdown(l=>l.keyword),byAngle:makeBreakdown(l=>l.primaryOutreachAngle||l.outreachMessages.find(m=>m.angle)?.angle||"unknown"),byPriority:makeBreakdown(l=>bucketPriority(l.priorityScore)),byFinding,byProblem:byFinding,followupPerformance,cohorts});
  }catch(error){res.status(500).json({error:error instanceof Error?error.message:String(error)});}});
+
+ app.get("/api/metrics/outreach",async(_req,res)=>{
+  try{
+    const contacted=await prisma.lead.count({where:{outreachMessages:{some:{status:"sent"}}}});
+    const replied=await prisma.lead.count({where:{outreachMessages:{some:{status:"sent"}},OR:[{replyStatus:{not:null}},{lastReplyAt:{not:null}}]}});
+    const meetings=await prisma.lead.count({where:{status:{in:["call_scheduled","proposal_sent","won"]}}});
+    const won=await prisma.lead.count({where:{status:"won"}});
+    res.json({contacted,replied,meetings,won,replyRate:pct(replied,contacted),meetingRate:pct(meetings,contacted),winRate:pct(won,contacted)});
+  }catch(error){res.status(500).json({error:error instanceof Error?error.message:String(error)});}
+ });
 }
