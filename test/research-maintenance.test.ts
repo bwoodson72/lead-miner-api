@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { refreshStaleResearch } from "../src/lib/research-maintenance-routes.js";
 
-function makePrisma(researchVersion = "lead-research-v4") {
+function makePrisma(researchVersion = "lead-research-v5") {
   return {
     lead: {
       async findMany() { return [{ id: 1, researchVersion }]; },
@@ -11,26 +11,25 @@ function makePrisma(researchVersion = "lead-research-v4") {
   } as any;
 }
 
-test("stale research refresh reports invalidated unsent outreach and replacement draft from core research", async () => {
+test("stale research refresh upgrades v3-v5 research and reports invalidated unsent outreach", async () => {
   const result = await refreshStaleResearch(
     makePrisma(),
     10,
     (async () => ({
-      result: { decision: "qualified" },
-      priorityScore: 80,
-      draft: { id: 20 },
+      result: { decision: "rebuild_candidate" },
+      priorityScore: null,
+      draft: null,
       invalidatedDrafts: 1,
     })) as any,
   );
 
-  assert.equal(result.targetResearchVersion, "lead-research-v5");
-  assert.deepEqual(result.staleResearchVersions, ["lead-research-v3", "lead-research-v4"]);
+  assert.equal(result.targetResearchVersion, "lead-research-v6");
+  assert.deepEqual(result.staleResearchVersions, ["lead-research-v3", "lead-research-v4", "lead-research-v5"]);
   assert.equal(result.refreshed, 1);
   assert.equal(result.failed, 0);
   assert.equal(result.invalidatedDrafts, 1);
-  assert.equal(result.replacementDraftsGenerated, 1);
-  assert.equal(result.results[0]?.previousResearchVersion, "lead-research-v4");
-  assert.equal(result.results[0]?.replacementDraftId, 20);
+  assert.equal(result.replacementDraftsGenerated, 0);
+  assert.equal(result.results[0]?.previousResearchVersion, "lead-research-v5");
 });
 
 test("stale research refresh leaves draft handling to core research when research fails", async () => {
@@ -48,20 +47,19 @@ test("stale research refresh leaves draft handling to core research when researc
   assert.match(result.results[0]?.error ?? "", /research failed/);
 });
 
-test("stale research refresh reports zero invalidations when no old unsent draft existed", async () => {
+test("v6 research does not generate replacement outreach before prioritization and angle selection", async () => {
   const result = await refreshStaleResearch(
-    makePrisma(),
+    makePrisma("lead-research-v4"),
     10,
     (async () => ({
-      result: { decision: "qualified" },
-      priorityScore: 80,
-      draft: { id: 30 },
+      result: { decision: "optimization_candidate" },
+      priorityScore: null,
+      draft: null,
       invalidatedDrafts: 0,
     })) as any,
   );
 
   assert.equal(result.refreshed, 1);
   assert.equal(result.invalidatedDrafts, 0);
-  assert.equal(result.replacementDraftsGenerated, 1);
-  assert.equal(result.results[0]?.replacementDraftId, 30);
+  assert.equal(result.replacementDraftsGenerated, 0);
 });
