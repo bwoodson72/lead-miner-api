@@ -2,6 +2,14 @@ import { detectAgency } from "./agency-filter.js";
 import { detectNationalChain } from "./chain-filter.js";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
+import {
+  assessSiteBusinessIdentity,
+  domainsMatch,
+  emailMatchesDomain,
+  normalizePhone,
+  searchResultSupportsLead,
+  type EnrichmentIdentityContext,
+} from "./enrichment-identity.js";
 
 export type EnrichmentResult = {
   businessName?: string;
@@ -17,7 +25,12 @@ export type EnrichmentResult = {
   chainReason?: string;
 };
 
-export type EnrichmentInput = { url: string; existingBusinessName?: string };
+export type EnrichmentInput = {
+  url: string;
+  existingBusinessName?: string;
+  existingPhone?: string;
+  existingAddress?: string;
+};
 
 type FetchResult = { html: string; finalUrl: string } | null;
 
@@ -114,7 +127,7 @@ function extractEmails(html: string): string[] {
 function pickBestEmail(emails: string[], siteDomain: string): string | undefined {
   const filtered = emails.filter((e) => !isCommonPlaceholder(e));
   if (!filtered.length) return undefined;
-  const sameDomain = filtered.filter((e) => { const d = e.split("@")[1] ?? ""; return d === siteDomain || d.endsWith(`.${siteDomain}`); });
+  const sameDomain = filtered.filter((e) => emailMatchesDomain(e, siteDomain));
   const roleOrder = ["info","contact","hello","sales","office","admin","support","service","estimates"];
   return [...(sameDomain.length ? sameDomain : filtered)].sort((a,b) => {
     const ai = roleOrder.indexOf(a.split("@")[0] ?? ""); const bi = roleOrder.indexOf(b.split("@")[0] ?? "");
@@ -131,7 +144,7 @@ function extractPhones(html: string): string[] {
 }
 
 function pickBestPhone(phones: string[]): string | undefined {
-  return phones.map((p) => p.replace(/\D/g,"" )).map((d) => d.length === 11 && d.startsWith("1") ? d.slice(1) : d).find((d) => d.length === 10);
+  return phones.map((phone) => normalizePhone(phone)).find((phone): phone is string => Boolean(phone));
 }
 
 function scoreContactUrl(url: string, text = "") {
@@ -185,18 +198,35 @@ async function discoverFromSitemap(baseUrl: string): Promise<string[]> {
   return [...new Set(urls)].slice(0,8);
 }
 
-async function serperEmailSearch(domain: string, businessName?: string): Promise<string | undefined> {
+function searchQueries(context: EnrichmentIdentityContext): string[] {
+  const queries = [`site:${context.domain} email`];
+  const phone = normalizePhone(context.phone);
+  if (context.businessName && phone) queries.push(`"${context.businessName}" "${phone}" email`);
+  if (context.businessName && context.address) queries.push(`"${context.businessName}" "${context.address}" email`);
+  if (context.businessName) queries.push(`"${context.businessName}" email`);
+  return [...new Set(queries)];
+}
+
+async function serperEmailSearch(context: EnrichmentIdentityContext): Promise<string | undefined> {
   const env = getEnv();
-  const queries = [`site:${domain} "@${domain}"`, businessName ? `"${businessName}" email` : `"${domain}" email`];
-  for (const q of queries) {
+  for (const q of searchQueries(context)) {
     try {
       const response = await fetchWithProviderBackoff("https://google.serper.dev/search", { method:"POST", headers:{"X-API-KEY":env.SERPER_API_KEY,"Content-Type":"application/json"}, body:JSON.stringify({ q, gl:"us", hl:"en", num:10 }) }, "Serper email search");
       if (!response.ok) continue;
       const data = await response.json() as Record<string, unknown>;
-      const chunks: string[] = [];
-      for (const row of Array.isArray(data.organic) ? data.organic as Record<string,unknown>[] : []) chunks.push(String(row.title ?? ""), String(row.snippet ?? ""), String(row.link ?? ""));
-      chunks.push(JSON.stringify(data));
-      const best = pickBestEmail(extractEmails(chunks.join("\n")), domain);
+      const verifiedCandidates: string[] = [];
+      for (const row of Array.isArray(data.organic) ? data.organic as Record<string,unknown>[] : []) {
+        const identityRow = {
+          title: String(row.title ?? ""),
+          snippet: String(row.snippet ?? ""),
+          link: String(row.link ?? ""),
+        };
+        const emails = extractEmails(`${identityRow.title}\n${identityRow.snippet}\n${identityRow.link}`);
+        for (const email of emails) {
+          if (emailMatchesDomain(email, context.domain) || searchResultSupportsLead(identityRow, context)) verifiedCandidates.push(email);
+        }
+      }
+      const best = pickBestEmail(verifiedCandidates, context.domain);
       if (best) return best;
     } catch { /* search fallback is best-effort */ }
   }
@@ -207,47 +237,62 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   const startTime = Date.now(); const notes: string[] = [];
   console.log(`[Enrichment] Starting enrichment for ${input.url}`);
   const inputDomain = new URL(input.url).hostname.replace(/^www\./,"");
+  const identityContext: EnrichmentIdentityContext = {
+    domain: inputDomain,
+    ...(input.existingBusinessName && { businessName: input.existingBusinessName }),
+    ...(input.existingPhone && { phone: input.existingPhone }),
+    ...(input.existingAddress && { address: input.existingAddress }),
+  };
   const homepage = await fetchHomepage(input.url);
   if (!homepage) {
     notes.push("Homepage unavailable across protocol/host variants");
-    const indexedEmail = await serperEmailSearch(inputDomain, input.existingBusinessName);
+    const indexedEmail = await serperEmailSearch(identityContext);
     const elapsed = Date.now() - startTime;
     if (indexedEmail) {
-      notes.push("Found email via search-index fallback despite unreachable site");
+      notes.push("Found identity-verified email via search-index fallback despite unreachable site");
       console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=yes, source=search-index, elapsed=${elapsed}ms`);
       return { ...(input.existingBusinessName && { businessName: input.existingBusinessName }), email: indexedEmail, enrichmentStatus: "enriched", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms` };
     }
     console.log(`[Enrichment] Completed ${input.url} — status=failed, email=no, source=search-index-exhausted, elapsed=${elapsed}ms`);
-    return { enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; search-index fallback found no email; elapsed=${elapsed}ms` };
+    return { enrichmentStatus:"failed", enrichmentNotes:`${notes.join("; ")}; identity-verified search-index fallback found no email; elapsed=${elapsed}ms` };
   }
 
   const url = homepage.finalUrl;
   const siteDomain = new URL(url).hostname.replace(/^www\./,"");
-  const businessName = input.existingBusinessName || extractBusinessName(homepage.html);
-  let email = pickBestEmail(extractEmails(homepage.html), siteDomain);
-  let phone = pickBestPhone(extractPhones(homepage.html));
+  const observedBusinessName = extractBusinessName(homepage.html);
+  const businessName = input.existingBusinessName || observedBusinessName;
+  const domainIdentityMatches = domainsMatch(inputDomain, siteDomain);
+  const businessIdentity = assessSiteBusinessIdentity(input.existingBusinessName, observedBusinessName);
+  const siteIdentityConflict = !domainIdentityMatches || businessIdentity === "conflict";
+  const siteContactDataTrusted = !siteIdentityConflict;
+
+  let email = siteContactDataTrusted ? pickBestEmail(extractEmails(homepage.html), inputDomain) : undefined;
+  let phone = !input.existingPhone && siteContactDataTrusted ? pickBestPhone(extractPhones(homepage.html)) : undefined;
   let contactPageUrl: string | undefined;
   notes.push(`Fetched ${url}`);
-  if (email) notes.push("Found email on homepage");
+  if (!domainIdentityMatches) notes.push(`Rejected site-derived contacts: destination domain ${siteDomain} does not match source domain ${inputDomain}`);
+  else if (businessIdentity === "conflict") notes.push(`Rejected site-derived contacts: site identity ${observedBusinessName ?? "unknown"} conflicts with source business ${input.existingBusinessName}`);
+  else if (email) notes.push("Found email on identity-consistent homepage");
+  if (input.existingPhone) notes.push("Preserved phone from discovery source; website phone cannot overwrite it");
 
-  const agencyDetection = detectAgency(homepage.html);
-  const chainDetection = detectNationalChain(homepage.html, undefined, siteDomain);
+  const agencyDetection = siteContactDataTrusted ? detectAgency(homepage.html) : { isAgencyManaged: false as const };
+  const chainDetection = siteContactDataTrusted ? detectNationalChain(homepage.html, undefined, siteDomain) : { isNationalChain: false as const };
 
-  if (!email && (agencyDetection.isAgencyManaged || chainDetection.isNationalChain)) {
+  if (!email && siteContactDataTrusted && (agencyDetection.isAgencyManaged || chainDetection.isNationalChain)) {
     const reason = agencyDetection.isAgencyManaged
-      ? `agency-managed${agencyDetection.agencyName ? ` (${agencyDetection.agencyName})` : ""}`
-      : `national chain${chainDetection.reason ? ` (${chainDetection.reason})` : ""}`;
+      ? `agency-managed${"agencyName" in agencyDetection && agencyDetection.agencyName ? ` (${agencyDetection.agencyName})` : ""}`
+      : `national chain${"reason" in chainDetection && chainDetection.reason ? ` (${chainDetection.reason})` : ""}`;
     notes.push(`Stopped email discovery early: ${reason}`);
     const elapsed = Date.now() - startTime;
     console.log(`[Enrichment] Completed ${input.url} — status=skipped, email=no, reason=${reason}, elapsed=${elapsed}ms`);
     return {
       ...(businessName && { businessName }), ...(phone && { phone }), enrichmentStatus: "skipped", enrichmentNotes: `${notes.join("; ")}; elapsed=${elapsed}ms`,
-      isAgencyManaged: agencyDetection.isAgencyManaged, ...(agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
-      isNationalChain: chainDetection.isNationalChain, ...(chainDetection.reason && { chainReason:chainDetection.reason }),
+      isAgencyManaged: agencyDetection.isAgencyManaged, ...("agencyName" in agencyDetection && agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
+      isNationalChain: chainDetection.isNationalChain, ...("reason" in chainDetection && chainDetection.reason && { chainReason:chainDetection.reason }),
     };
   }
 
-  if (!email) {
+  if (!email && siteContactDataTrusted) {
     const realLinks = discoverUsefulPages(homepage.html, url);
     const sitemapLinks = realLinks.length < 3 ? await discoverFromSitemap(url) : [];
     const candidates = [...new Set([...realLinks, ...sitemapLinks])].slice(0,8);
@@ -255,18 +300,19 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
     for (const pageUrl of candidates) {
       const page = await fetchHtml(pageUrl, 6_000, true);
       if (!page) continue;
-      email ||= pickBestEmail(extractEmails(page.html), siteDomain);
-      phone ||= pickBestPhone(extractPhones(page.html));
-      if (email) { contactPageUrl = page.finalUrl; notes.push(`Found email on ${new URL(page.finalUrl).pathname}`); break; }
+      if (!domainsMatch(new URL(page.finalUrl).hostname, inputDomain)) continue;
+      email ||= pickBestEmail(extractEmails(page.html), inputDomain);
+      if (!input.existingPhone) phone ||= pickBestPhone(extractPhones(page.html));
+      if (email) { contactPageUrl = page.finalUrl; notes.push(`Found email on identity-consistent ${new URL(page.finalUrl).pathname}`); break; }
     }
   }
 
   if (!email) {
-    email = await serperEmailSearch(siteDomain, businessName);
-    if (email) notes.push("Found email via search-index fallback");
+    email = await serperEmailSearch(identityContext);
+    if (email) notes.push("Found identity-verified email via search-index fallback");
   }
 
-  if (!email) notes.push("No usable email found; AI research should be skipped");
+  if (!email) notes.push("No identity-verified usable email found; AI research should be skipped");
   const elapsed = Date.now() - startTime;
   const enrichmentNotes = `${notes.join("; ")}; elapsed=${elapsed}ms`;
   console.log(`[Enrichment] Completed ${input.url} — status=enriched, email=${email ? "yes" : "no"}, elapsed=${elapsed}ms`);
@@ -274,7 +320,9 @@ export async function enrichLeadFromSite(input: EnrichmentInput): Promise<Enrich
   return {
     ...(businessName && { businessName }), ...(contactPageUrl && { contactPageUrl }), ...(email && { email }), ...(phone && { phone }),
     enrichmentStatus:"enriched", enrichmentNotes,
-    isAgencyManaged: agencyDetection.isAgencyManaged, ...(agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
-    isNationalChain: chainDetection.isNationalChain, ...(chainDetection.reason && { chainReason:chainDetection.reason }),
+    ...(siteContactDataTrusted && { isAgencyManaged: agencyDetection.isAgencyManaged }),
+    ...(siteContactDataTrusted && "agencyName" in agencyDetection && agencyDetection.agencyName && { agencyName:agencyDetection.agencyName }),
+    ...(siteContactDataTrusted && { isNationalChain: chainDetection.isNationalChain }),
+    ...(siteContactDataTrusted && "reason" in chainDetection && chainDetection.reason && { chainReason:chainDetection.reason }),
   };
 }
