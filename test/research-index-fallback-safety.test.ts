@@ -77,7 +77,7 @@ test("indexed fallback plus severe measured performance becomes optimization can
   assert.equal(safe.decision, "optimization_candidate");
   assert.equal(safe.assetStrength, "constrained");
   assert.equal(safe.confidence, 0.65);
-  assert.equal(safe.decisionReason, "Optimization candidate because direct performance measurements show a material performance constraint while same-domain indexed evidence indicates a substantial existing website. Direct inspection is still required before a rebuild conclusion can be supported.");
+  assert.equal(safe.decisionReason, "Optimization candidate because direct performance measurements show a material performance constraint while same-domain indexed evidence indicates a substantial existing website. Direct site inspection is still required before a rebuild conclusion can be supported.");
 });
 
 test("crawler uncertainty is not stored as a material finding", () => {
