@@ -38,7 +38,6 @@ export async function refreshStaleResearch(
     success: boolean;
     decision?: string;
     invalidatedDrafts?: number;
-    replacementDraftId?: number;
     error?: string;
   }> = [];
 
@@ -51,7 +50,6 @@ export async function refreshStaleResearch(
         success: true,
         decision: processed.result.decision,
         invalidatedDrafts: processed.invalidatedDrafts,
-        replacementDraftId: processed.draft?.id,
       });
     } catch (error) {
       results.push({
@@ -71,7 +69,7 @@ export async function refreshStaleResearch(
     refreshed: results.filter((result) => result.success).length,
     failed: results.filter((result) => !result.success).length,
     invalidatedDrafts: results.reduce((sum, result) => sum + (result.invalidatedDrafts ?? 0), 0),
-    replacementDraftsGenerated: results.filter((result) => result.replacementDraftId).length,
+    replacementDraftsGenerated: 0,
     remaining,
     results,
   };
