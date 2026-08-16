@@ -66,9 +66,14 @@ export async function runLeadSearchPipeline(input: KeywordInput, onProgress?: (s
   for (let i = 0; i < slowSites.length; i++) {
     const { entry, result } = slowSites[i]!;
     const baseLead = buildLeadRecord({ keyword: entry.keyword, domain: entry.domain, landingPageUrl: entry.url, pageSpeed: result, adSource: entry.adSource, serpAd: entry.serpAd });
-    const enrichmentResult = await enrichLeadFromSite({ url: entry.url, existingBusinessName: baseLead.businessName });
-    if (enrichmentResult.enrichmentStatus === "enriched") { diagnostics.leadsEnriched++; if (enrichmentResult.email) diagnostics.emailsFound++; if (enrichmentResult.phone) diagnostics.phonesFound++; } else if (enrichmentResult.enrichmentStatus === "failed") diagnostics.enrichmentFailures++;
-    leads.push({ ...baseLead, ...(enrichmentResult.businessName && { businessName: enrichmentResult.businessName }), ...(enrichmentResult.contactPageUrl && { contactPageUrl: enrichmentResult.contactPageUrl }), ...(enrichmentResult.email && { email: enrichmentResult.email }), ...(enrichmentResult.phone && { phone: enrichmentResult.phone }), ...(enrichmentResult.address && { address: enrichmentResult.address }), enrichmentStatus: enrichmentResult.enrichmentStatus, enrichmentNotes: enrichmentResult.enrichmentNotes, ...(enrichmentResult.isAgencyManaged !== undefined && { isAgencyManaged: enrichmentResult.isAgencyManaged }), ...(enrichmentResult.agencyName && { agencyName: enrichmentResult.agencyName }), ...(enrichmentResult.isNationalChain !== undefined && { isNationalChain: enrichmentResult.isNationalChain }), ...(enrichmentResult.chainReason && { chainReason: enrichmentResult.chainReason }) });
+    const enrichmentResult = await enrichLeadFromSite({
+      url: entry.url,
+      existingBusinessName: baseLead.businessName,
+      existingPhone: baseLead.phone,
+      existingAddress: baseLead.address,
+    });
+    if (enrichmentResult.enrichmentStatus === "enriched") { diagnostics.leadsEnriched++; if (enrichmentResult.email) diagnostics.emailsFound++; if (enrichmentResult.phone || baseLead.phone) diagnostics.phonesFound++; } else if (enrichmentResult.enrichmentStatus === "failed") diagnostics.enrichmentFailures++;
+    leads.push({ ...baseLead, ...(enrichmentResult.businessName && { businessName: enrichmentResult.businessName }), ...(enrichmentResult.contactPageUrl && { contactPageUrl: enrichmentResult.contactPageUrl }), ...(enrichmentResult.email && { email: enrichmentResult.email }), ...(!baseLead.phone && enrichmentResult.phone && { phone: enrichmentResult.phone }), ...(enrichmentResult.address && { address: enrichmentResult.address }), enrichmentStatus: enrichmentResult.enrichmentStatus, enrichmentNotes: enrichmentResult.enrichmentNotes, ...(enrichmentResult.isAgencyManaged !== undefined && { isAgencyManaged: enrichmentResult.isAgencyManaged }), ...(enrichmentResult.agencyName && { agencyName: enrichmentResult.agencyName }), ...(enrichmentResult.isNationalChain !== undefined && { isNationalChain: enrichmentResult.isNationalChain }), ...(enrichmentResult.chainReason && { chainReason: enrichmentResult.chainReason }) });
     onProgress?.("enriching", `${i + 1} of ${slowSites.length} sites enriched`);
   }
   onProgress?.("saving", `Saving ${leads.length} leads to database...`);
