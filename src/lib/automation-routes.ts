@@ -10,7 +10,7 @@ import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes
 import { AUTOMATION_JOB_NAMES, runNamedAutomationJob, type AutomationJobName } from "./automation-jobs.js";
 import { getAiBudgetStatus } from "./ai-budget.js";
 
-const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9"];
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10"];
 const RunSchema = z.object({ jobName: z.enum(AUTOMATION_JOB_NAMES) });
 const PAUSE_TYPE = "global";
 const PAUSE_VALUE = "outreach";
