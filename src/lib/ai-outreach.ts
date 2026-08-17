@@ -343,7 +343,7 @@ export async function generateOutreachDraft(input: {
   const senderEmail = input.senderEmail?.trim() || "leads@brianwoodson.dev";
   const senderFirstName = senderName.split(/\s+/)[0] || senderName;
   const strategy: OutreachStrategy = input.strategy ?? {
-    observation: sanitizeProspectFacingEvidence(input.primaryOutreachAngle) ?? sanitizeProspectFacingEvidence(selectedFinding.title) ?? selectedFinding.title,
+    observation: sanitizeProspectFacingEvidence(input.primaryOutreachAngle ?? null) ?? sanitizeProspectFacingEvidence(selectedFinding.title) ?? selectedFinding.title,
     ownerStake: sanitizeProspectFacingEvidence(selectedFinding.assetCapability) ?? "The issue may make it harder for someone to understand the business or take the next step.",
     buyerMoment: null,
     psychologicalLever: "self_interest",
