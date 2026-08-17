@@ -91,15 +91,16 @@ test("existing drafts without a neutral greeting require regeneration", () => {
   assert.equal(outreachDraftNeedsRegeneration("The mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.", "A question about the site"), true);
 });
 
-test("specific observation with neutral greeting remains acceptable", () => {
-  const body = "Hi,\n\nThe mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.\n\nI'm Brian Woodson, a web developer who builds custom websites for service businesses.\n\nWould it be worth looking at what a homeowner sees before reaching the estimate form?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the site", "Would it be worth looking at what a homeowner sees before reaching the estimate form?"), false);
+test("specific observation with natural sender context and simple CTA remains acceptable", () => {
+  const body = "Hi,\n\nI noticed the Weatherford page takes a while to show the quote options. Someone comparing roofers may decide not to wait.\n\nI build custom websites for service businesses, and this is the kind of issue I work on.\n\nWould you be open to a quick conversation about it?\n\nBrian";
+  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the Weatherford page", "Would you be open to a quick conversation about it?"), false);
 });
 
-test("sender identity is recognized from configured sender name", () => {
-  const body = "Hi,\n\nThe estimate path is slow to become usable.\n\nI'm Brian Woodson, a web developer who builds custom websites for service businesses.";
-  assert.equal(containsSenderIdentity(body, "Brian Woodson"), true);
-  assert.equal(containsSenderIdentity(body, "Someone Else"), false);
+test("sender context does not require the same full-name bio sentence", () => {
+  assert.equal(containsSenderIdentity("I’m Brian Woodson, a web developer who builds custom websites for service businesses.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("I build custom websites for service businesses, and this is the kind of issue I work on.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("I'm a web developer focused on service-business websites.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("The page takes a while to load.", "Brian Woodson"), false);
 });
 
 test("prospect-facing consultant jargon is rejected", () => {
@@ -107,16 +108,16 @@ test("prospect-facing consultant jargon is rejected", () => {
   assert.equal(containsConsultantJargon("Someone comparing roofers may leave before reaching the estimate form."), false);
 });
 
-test("meta, fragment, and generic consultation CTAs require regeneration", () => {
+test("meta, fragment, and generic website-improvement CTAs require regeneration while simple conversation CTAs pass", () => {
   assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
   assert.equal(ctaNeedsRegeneration("Brief consultation about improving the site."), true);
   assert.equal(ctaNeedsRegeneration("Would you be open to a brief consultation about improving the site's responsiveness?"), true);
+  assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), false);
   assert.equal(ctaNeedsRegeneration("Would it be worth looking at what a homeowner sees before they reach the estimate form?"), false);
-  assert.equal(ctaNeedsRegeneration("Would you want to know whether this is making it easier for a prospect to choose the next roofer?"), false);
 });
 
 test("stored drafts can use CTA validation when CTA is available", () => {
-  const body = "Hi,\n\nThe homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.\n\nI'm Brian Woodson, a web developer who builds custom websites for service businesses.";
+  const body = "Hi,\n\nThe homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.\n\nI build custom websites for service businesses.";
   assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Invite a brief consultation about improving the site."), true);
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would it be worth looking at what a homeowner sees before reaching the estimate form?"), false);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would you be open to a quick conversation about it?"), false);
 });
