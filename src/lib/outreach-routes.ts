@@ -25,6 +25,7 @@ const MaintenanceRegenerateSchema = z.object({
   scope: z.enum(["all", "initial", "followup"]).default("all"),
   ids: z.array(z.number().int().positive()).max(500).optional(),
   limit: z.number().int().min(1).max(500).default(100),
+  force: z.boolean().default(false),
 });
 
 function invalid(res: any, error: ZodError) { res.status(400).json({ error: "Invalid request", issues: error.issues }); }
@@ -70,7 +71,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/outreach/maintenance/regenerate-unsent", async (req, res) => {
     let parsed: z.infer<typeof MaintenanceRegenerateSchema>;
     try { parsed = MaintenanceRegenerateSchema.parse(req.body ?? {}); } catch (error) { if (error instanceof ZodError) { invalid(res, error); return; } throw error; }
-    try { res.json(await regenerateUnsentOutreach(prisma, { scope: parsed.scope, messageIds: parsed.ids, limit: parsed.limit })); }
+    try { res.json(await regenerateUnsentOutreach(prisma, { scope: parsed.scope, messageIds: parsed.ids, limit: parsed.limit, force: parsed.force })); }
     catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
@@ -125,10 +126,25 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     if (!current) { res.status(404).json({ error: "Message not found" }); return; }
     if (current.kind !== "initial" || ["sending", "sent"].includes(current.status)) { res.status(409).json({ error: "Only unsent initial outreach can be regenerated" }); return; }
     try {
-      const message = await ensureInitialOutreachDraft(prisma, current.leadId, true);
-      if (message) await prisma.outreachMessage.update({ where: { id: message.id }, data: { generationReason: parsed.reason } });
-      await prisma.activity.create({ data: { leadId: current.leadId, type: "message_regenerated", summary: `Outreach regenerated: ${parsed.reason}`, metadata: { previousMessageId: id, replacementMessageId: message?.id ?? null } } });
-      res.json(message);
+      const regeneration = await regenerateUnsentOutreach(prisma, { scope: "initial", messageIds: [id], limit: 1, force: true });
+      const outcome = regeneration.results[0];
+      if (!outcome) { res.status(409).json({ error: "This message is no longer available for regeneration" }); return; }
+      if (!outcome.success) { res.status(409).json({ error: outcome.error ?? "Regeneration failed" }); return; }
+
+      const message = outcome.replacementMessageId
+        ? await prisma.outreachMessage.update({ where: { id: outcome.replacementMessageId }, data: { generationReason: parsed.reason } })
+        : null;
+      if (message) {
+        await prisma.activity.create({
+          data: {
+            leadId: current.leadId,
+            type: "message_regenerated",
+            summary: `Outreach regenerated: ${parsed.reason}`,
+            metadata: { previousMessageId: id, replacementMessageId: message.id },
+          },
+        });
+      }
+      res.json({ message, outcome });
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
