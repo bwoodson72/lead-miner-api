@@ -176,6 +176,10 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
     instructions: settings.outreachInstructions,
     leadId,
     assessmentId: assessment.id,
+    decision: assessment.decision,
+    assetStrength: assessment.assetStrength,
+    researchSummary: assessment.researchSummary,
+    decisionReason: assessment.decisionReason,
     angle: lead.primaryOutreachAngle,
     finding: {
       id: selectedFinding.id,
@@ -201,8 +205,10 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       domain: lead.domain,
       keyword: lead.keyword,
       primaryOutreachAngle: lead.primaryOutreachAngle!,
-      researchSummary: lead.researchSummary,
-      qualificationReason: lead.qualificationReason,
+      researchSummary: assessment.researchSummary,
+      qualificationReason: assessment.decisionReason,
+      qualificationDecision: assessment.decision,
+      assetStrength: assessment.assetStrength,
       selectedFinding: {
         id: selectedFinding.id,
         category: selectedFinding.category,
@@ -242,7 +248,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
           leadId,
           type: shouldAutoApprove ? "message_auto_approved" : "message_generated",
           summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`,
-          metadata: { confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, findingId: selectedFinding.id, model: generated.model, approvalMode: settings.approvalMode },
+          metadata: { confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, findingId: selectedFinding.id, qualificationDecision: assessment.decision, model: generated.model, approvalMode: settings.approvalMode },
         },
       });
       await tx.aIJob.update({
