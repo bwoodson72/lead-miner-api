@@ -78,9 +78,9 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
     const followUpNumber = sequenceNumber - 1;
     const breakup = isBreakupSequenceNumber(sequenceNumber);
     return prisma.$transaction(async (tx) => {
-      const message = await tx.outreachMessage.create({ data: { leadId, kind: "followup", sequenceNumber, subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, confidence: generated.draft.confidence, requiresReview: !autoApprove, status: autoApprove ? "approved" : "draft", approvedAt: autoApprove ? new Date() : null } });
+      const message = await tx.outreachMessage.create({ data: { leadId, kind: "followup", sequenceNumber, subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, confidence: generated.draft.confidence, requiresReview: !autoApprove, promptVersion: FOLLOWUP_PROMPT_VERSION, status: autoApprove ? "approved" : "draft", approvedAt: autoApprove ? new Date() : null } });
       await tx.lead.update({ where: { id: leadId }, data: { replyStatus: lead.replyStatus === "out_of_office" ? null : lead.replyStatus, replySummary: lead.replyStatus === "out_of_office" ? null : lead.replySummary } });
-      await tx.activity.create({ data: { leadId, type: autoApprove ? "followup_auto_approved" : "followup_generated", summary: `${autoApprove ? "Auto-approved" : "Generated"} follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`, metadata: { confidence: generated.draft.confidence, model: generated.model, sequenceId: sequence.id, followUpNumber, breakup } } });
+      await tx.activity.create({ data: { leadId, type: autoApprove ? "followup_auto_approved" : "followup_generated", summary: `${autoApprove ? "Auto-approved" : "Generated"} follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`, metadata: { confidence: generated.draft.confidence, model: generated.model, sequenceId: sequence.id, followUpNumber, breakup, promptVersion: FOLLOWUP_PROMPT_VERSION } } });
       await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
       return message;
     });
@@ -136,19 +136,7 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
     const referrals = referralParts(classified.result.referralContact);
 
     await prisma.$transaction(async (tx) => {
-      await tx.lead.update({
-        where: { id: leadId },
-        data: {
-          status,
-          replyStatus: c,
-          replySummary: classified.result.summary,
-          lastReplyAt: c === "out_of_office" ? null : latest.internalDate,
-          replyHandledAt: ["bounce", "unsubscribe", "spam_or_scam"].includes(c) ? new Date() : null,
-          followUpDate: oooResume,
-          revisitAt,
-          ...(c === "bounce" ? { email: null, emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: new Date(), emailEnrichmentReason: "Previous address bounced" } : {}),
-        },
-      });
+      await tx.lead.update({ where: { id: leadId }, data: { status, replyStatus: c, replySummary: classified.result.summary, lastReplyAt: c === "out_of_office" ? null : latest.internalDate, replyHandledAt: ["bounce", "unsubscribe", "spam_or_scam"].includes(c) ? new Date() : null, followUpDate: oooResume, revisitAt, ...(c === "bounce" ? { email: null, emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: new Date(), emailEnrichmentReason: "Previous address bounced" } : {}) } });
       await tx.emailThread.upsert({ where: { providerThreadId: threadId }, update: { status: ["bounce", "unsubscribe", "spam_or_scam"].includes(c) ? "closed" : c === "out_of_office" ? "open" : "replied", lastInboundAt: latest.internalDate, recipientEmail: lead.email }, create: { leadId, provider: "gmail", providerThreadId: threadId, recipientEmail: lead.email, status: ["bounce", "unsubscribe", "spam_or_scam"].includes(c) ? "closed" : c === "out_of_office" ? "open" : "replied", lastInboundAt: latest.internalDate } });
       await tx.activity.create({ data: { leadId, type: "reply_received", summary: `${c}: ${classified.result.summary}`, metadata: { gmailMessageId: latest.id, providerThreadId: threadId, recommendedAction: classified.result.recommendedAction, extractedQuestion: classified.result.extractedQuestion, extractedObjection: classified.result.extractedObjection, referralContact: classified.result.referralContact, returnDate: classified.result.returnDate, suggestedResponse: settings.autoGenerateSuggestedReplies ? classified.result.suggestedResponse : null, confidence: classified.result.confidence, revisitAt: revisitAt?.toISOString() ?? null } } });
       await tx.activity.create({ data: { leadId, type: "reply_classified", summary: `Reply classified as ${c}`, metadata: { confidence: classified.result.confidence, recommendedAction: classified.result.recommendedAction } } });
@@ -184,11 +172,7 @@ export function registerFollowupReplyRoutes(app: Express, prisma: PrismaClient) 
   });
   app.get("/api/inbox/actions", async (_req, res) => {
     try {
-      const leads = await prisma.lead.findMany({
-        where: { replyHandledAt: null, replyStatus: { in: ["interested", "question", "objection", "not_now", "wrong_person", "referral", "out_of_office", "booking_intent", "other"] } },
-        orderBy: [{ status: "asc" }, { lastReplyAt: "desc" }],
-        include: { activities: { where: { type: "reply_received" }, orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { sequenceNumber: "asc" } }, emailThreads: { orderBy: { updatedAt: "desc" } }, contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] } },
-      });
+      const leads = await prisma.lead.findMany({ where: { replyHandledAt: null, replyStatus: { in: ["interested", "question", "objection", "not_now", "wrong_person", "referral", "out_of_office", "booking_intent", "other"] } }, orderBy: [{ status: "asc" }, { lastReplyAt: "desc" }], include: { activities: { where: { type: "reply_received" }, orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { sequenceNumber: "asc" } }, emailThreads: { orderBy: { updatedAt: "desc" } }, contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] } } });
       res.json({ leads, total: leads.length });
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
