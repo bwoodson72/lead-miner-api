@@ -42,6 +42,15 @@ test("corroborated template evidence can retain its original confidence", () => 
   assert.equal(safe.confidence, 0.99);
 });
 
+test("explicit visitor-visibility uncertainty blocks outreach even with mixed sources", () => {
+  const safe = applyResearchEvidenceSafety(problem({
+    evidenceSources: ["dom_text", "representative_page"] as any,
+    businessConsequence: "Because the evidence is static HTML rather than rendered-browser output, the exact visitor-facing presentation should be verified.",
+  }));
+  assert.equal(safe.outreachValue, "low");
+  assert.equal(safe.confidence, 0.4);
+});
+
 test("uncorroborated template wording is removed from the primary outreach angle", () => {
   assert.equal(sanitizePrimaryOutreachAngle("Remove leftover kitchen template content", [problem()]), null);
 });
@@ -49,6 +58,14 @@ test("uncorroborated template wording is removed from the primary outreach angle
 test("corroborated visitor-facing evidence may remain the primary outreach angle", () => {
   const corroborated = problem({ evidenceSources: ["navigation", "dom_text"] as any });
   assert.equal(sanitizePrimaryOutreachAngle("Remove leftover kitchen template content", [corroborated]), "Remove leftover kitchen template content");
+});
+
+test("template angle is blocked when the finding itself says rendered verification is still needed", () => {
+  const uncertain = problem({
+    evidenceSources: ["representative_page", "dom_text"] as any,
+    businessConsequence: "The exact visitor-facing presentation should be verified in a rendered browser.",
+  });
+  assert.equal(sanitizePrimaryOutreachAngle("Remove leftover kitchen template content", [uncertain]), null);
 });
 
 test("missing-form claims are blocked because single-page research cannot prove site-wide absence", () => {
