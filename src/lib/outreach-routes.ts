@@ -9,6 +9,9 @@ import { registerAutomationRoutes } from "./automation-routes.js";
 import { registerAnalyticsRoutes } from "./analytics-routes.js";
 import { getAppSettings } from "./settings.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
+import { regenerateUnsentOutreach } from "./outreach-maintenance.js";
+import { MANUAL_OUTREACH_VERSION, isCurrentOutreachPromptVersion } from "./outreach-version.js";
+import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
 
 const MessagePatchSchema = z.object({
   subject: z.string().min(1).max(120).optional(),
@@ -18,6 +21,11 @@ const MessagePatchSchema = z.object({
 }).refine((value) => Object.keys(value).length > 0, { message: "At least one update is required" });
 const RegenerateSchema = z.object({ reason: z.string().min(3).max(1000) });
 const BulkIdsSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(50) });
+const MaintenanceRegenerateSchema = z.object({
+  scope: z.enum(["all", "initial", "followup"]).default("all"),
+  ids: z.array(z.number().int().positive()).max(500).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
 
 function invalid(res: any, error: ZodError) { res.status(400).json({ error: "Invalid request", issues: error.issues }); }
 
@@ -32,15 +40,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       const messages = await prisma.outreachMessage.findMany({
         where: { status: { in: ["draft", "approved"] } },
         orderBy: [{ status: "asc" }, { generatedAt: "desc" }],
-        include: {
-          lead: {
-            include: {
-              assetAssessments: { orderBy: { createdAt: "desc" }, take: 1, include: { findings: { orderBy: [{ significance: "desc" }, { confidence: "desc" }] } } },
-              problems: { orderBy: { confidence: "desc" }, take: 4 },
-              scores: { orderBy: { createdAt: "desc" }, take: 1 },
-            },
-          },
-        },
+        include: { lead: { include: { assetAssessments: { orderBy: { createdAt: "desc" }, take: 1, include: { findings: { orderBy: [{ significance: "desc" }, { confidence: "desc" }] } } }, problems: { orderBy: { confidence: "desc" }, take: 4 }, scores: { orderBy: { createdAt: "desc" }, take: 1 } } } },
       });
       res.json({ messages, total: messages.length });
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
@@ -67,28 +67,23 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     try { res.json(await ensureInitialOutreachDraft(prisma, id, req.body?.force === true)); } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
+  app.post("/api/outreach/maintenance/regenerate-unsent", async (req, res) => {
+    let parsed: z.infer<typeof MaintenanceRegenerateSchema>;
+    try { parsed = MaintenanceRegenerateSchema.parse(req.body ?? {}); } catch (error) { if (error instanceof ZodError) { invalid(res, error); return; } throw error; }
+    try { res.json(await regenerateUnsentOutreach(prisma, { scope: parsed.scope, messageIds: parsed.ids, limit: parsed.limit })); }
+    catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   app.post("/api/outreach/backfill-drafts", async (req, res) => {
     const requested = Number(req.body?.limit ?? SAFETY_LIMITS.bulkResearchMax);
     if (Number.isFinite(requested) && requested > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Draft backfill is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
     const limit = capRequestedLimit(requested, SAFETY_LIMITS.bulkResearchMax, SAFETY_LIMITS.bulkResearchMax);
     try {
-      const leads = await prisma.lead.findMany({
-        where: {
-          qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] },
-          email: { not: null },
-          status: { in: ["qualified", "ready_for_outreach"] },
-          outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } },
-        },
-        orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
-        take: limit,
-        select: { id: true },
-      });
+      const leads = await prisma.lead.findMany({ where: { qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: limit, select: { id: true } });
       const results: Array<{ leadId:number; success:boolean; messageId?:number; priorityScore?:number; error?:string }> = [];
       for (const lead of leads) {
-        try {
-          const prepared = await prepareLeadForOutreach(prisma, lead.id, { generateDraft: true });
-          results.push({ leadId: lead.id, success: true, messageId: prepared.draft?.id, priorityScore: prepared.priority.score });
-        } catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); }
+        try { const prepared = await prepareLeadForOutreach(prisma, lead.id, { generateDraft: true }); results.push({ leadId: lead.id, success: true, messageId: prepared.draft?.id, priorityScore: prepared.priority.score }); }
+        catch (error) { results.push({ leadId: lead.id, success: false, error: error instanceof Error ? error.message : String(error) }); }
       }
       res.json({ processed: results.length, cap: SAFETY_LIMITS.bulkResearchMax, results });
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
@@ -104,6 +99,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     const data: Record<string, unknown> = {};
     if (parsed.subject) data.subject = parsed.subject.trim();
     if (parsed.bodyText) data.bodyText = parsed.bodyText.trim();
+    if (parsed.subject || parsed.bodyText) { data.promptVersion = MANUAL_OUTREACH_VERSION; data.requiresReview = true; }
     if (parsed.scheduledAt !== undefined) data.scheduledAt = parsed.scheduledAt ? new Date(parsed.scheduledAt) : null;
     if (parsed.status !== undefined) {
       data.status = parsed.status;
@@ -114,7 +110,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       const updated = await prisma.$transaction(async (tx) => {
         const message = await tx.outreachMessage.update({ where: { id }, data });
         if (parsed.status === "rejected") await tx.lead.update({ where: { id: message.leadId }, data: { status: "held", followUpDate: null } });
-        await tx.activity.create({ data: { leadId: message.leadId, type: parsed.status === "approved" ? "message_approved" : parsed.status === "rejected" ? "message_rejected" : "message_updated", summary: parsed.status === "approved" ? "Outreach approved" : parsed.status === "rejected" ? "Outreach draft rejected and lead held" : "Outreach draft edited", metadata: { scheduledAt: parsed.scheduledAt ?? null } } });
+        await tx.activity.create({ data: { leadId: message.leadId, type: parsed.status === "approved" ? "message_approved" : parsed.status === "rejected" ? "message_rejected" : "message_updated", summary: parsed.status === "approved" ? "Outreach approved" : parsed.status === "rejected" ? "Outreach draft rejected and lead held" : "Outreach draft edited", metadata: { scheduledAt: parsed.scheduledAt ?? null, promptVersion: message.promptVersion } } });
         return message;
       });
       res.json(updated);
@@ -143,8 +139,8 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       const settings = await getAppSettings(prisma);
       const messages = await prisma.outreachMessage.findMany({ where: { id: { in: parsed.ids }, status: "draft" }, include: { lead: true } });
       if (messages.length !== parsed.ids.length) { res.status(409).json({ error: "Every selected message must still be an unsent draft" }); return; }
-      const unsafe = messages.filter((message) => message.requiresReview || (message.confidence ?? 0) < settings.minAutoApproveConfidence || (message.lead.priorityScore ?? 0) < settings.minAutoApprovePriority);
-      if (unsafe.length) { res.status(409).json({ error: "Bulk approval blocked because one or more drafts do not meet configured quality thresholds", messageIds: unsafe.map((message) => message.id) }); return; }
+      const unsafe = messages.filter((message) => !isCurrentOutreachPromptVersion(message.kind, message.promptVersion) || outreachDraftNeedsRegeneration(message.bodyText, message.subject) || message.requiresReview || (message.confidence ?? 0) < settings.minAutoApproveConfidence || (message.lead.priorityScore ?? 0) < settings.minAutoApprovePriority);
+      if (unsafe.length) { res.status(409).json({ error: "Bulk approval blocked because one or more drafts are stale or do not meet configured quality thresholds", messageIds: unsafe.map((message) => message.id) }); return; }
       await prisma.$transaction(async (tx) => {
         await tx.outreachMessage.updateMany({ where: { id: { in: parsed.ids } }, data: { status: "approved", approvedAt: new Date() } });
         for (const message of messages) await tx.activity.create({ data: { leadId: message.leadId, type: "message_approved", summary: "Outreach bulk-approved" } });
