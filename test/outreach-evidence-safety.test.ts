@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { generateOutreachDraft } from "../src/lib/ai-outreach.js";
+import { containsMinimizingRemediation, generateOutreachDraft } from "../src/lib/ai-outreach.js";
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
   await assert.rejects(
@@ -42,4 +42,14 @@ test("outreach drafting rejects old stored claims that a contact page has no for
     }, "unused-model", 0.7, "Write a concise evidence-backed email."),
     /No evidence-backed outreach finding meets the configured safety threshold/,
   );
+});
+
+test("representative simple-cleanup outreach is rejected by deterministic draft safety", () => {
+  const body = "A simple cleanup—one primary phone, one monitored email, and consistent contact details across the site—could make it easier for prospects to reach you.";
+  assert.equal(containsMinimizingRemediation(body), true);
+});
+
+test("problem-and-consultation framing is not rejected as trivial remediation", () => {
+  const body = "I noticed the site gives visitors conflicting contact information, which can create uncertainty at the point they are deciding whether to reach out. Would you be open to a brief consultation to look at whether the website is doing enough to support new inquiries?";
+  assert.equal(containsMinimizingRemediation(body), false);
 });
