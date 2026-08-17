@@ -122,7 +122,7 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
 }
 
 export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10) {
-  const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
+  const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.automationResearchMax);
   const leads = await prisma.lead.findMany({ where: { email: { not: null }, status: { in: ["new", "research_pending"] }, lastResearchedAt: null, aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } } }, orderBy: { createdAt: "asc" }, take: safeLimit, select: { id: true } });
   const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number | null; draftId?: number; error?: string }> = [];
   for (const lead of leads) {
@@ -162,7 +162,7 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
   app.get("/api/leads/:id/research", async (req, res) => {
     const id = Number(req.params["id"]);
     if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
-    const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } } });
+    const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: { confidence: "desc" } }, scores: { orderBy: { createdAt: "desc" }, take: 1 }, assetAssessments: assetAssessmentInclude, activities: { orderBy: { createdAt: "desc" }, take: 50 }, outreachMessages: { orderBy: { generatedAt: "desc" } } });
     if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
     res.json(lead);
   });
