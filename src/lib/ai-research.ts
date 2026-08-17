@@ -82,7 +82,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v10";
+export const RESEARCH_VERSION = "lead-research-v11";
 
 function dimensionJsonSchema() {
   return {
@@ -152,13 +152,14 @@ const HARD_RESEARCH_RULES = [
   "Keep research analytical and stage-pure. Do not discuss conversations, outreach, prospecting, pitching, messaging, sales approaches, or contacting the business.",
   "Use only supplied evidence. Never invent traffic, bounce rate, conversions, revenue, ad spend, customer behavior, budget, business plans, growth, rankings, security failures, maintainability costs, or functionality not established by the packet.",
   "Measured performance is pre-classified deterministically in performanceAssessment using Google ranges. Interpret its severity; do not redefine or recalculate the bands.",
-  "A severe performance signal can materially constrain the website as an acquisition asset and may independently make optimization consideration reasonable.",
+  "Poor performance is evidence, not an automatic qualification floor. Do not default to OPTIMIZATION_CANDIDATE merely because one or more performance metrics are poor; assess whether the overall limitation is material enough to justify a meaningful web-development engagement.",
+  "A severe performance signal can materially constrain the website as an acquisition asset and may independently support optimization when the severity is meaningful.",
   "A Lead Miner crawler fetch failure is only an inspection failure. It is never proof that normal visitors cannot reach the website.",
   "providerScrapeEvidence is a current third-party extraction of the requested page. When succeeded is true, provider_scrape may support current page-topic, business-representation, demand-alignment, and content evidence. It is not a rendered browser and cannot prove forms, clicks, visual presentation, JavaScript-only interactions, complete navigation, or visitor reachability.",
   "If direct crawling fails but providerScrapeEvidence succeeds, do not describe the website as uninspected. State specifically that Lead Miner's direct TLS/HTTP crawler failed while current provider extraction succeeded.",
   "If direct crawling fails but searchIndexEvidence contains same-domain pages, use search_index only as bounded evidence about indexed page topics and apparent architecture. Search-index evidence may lag the live site.",
   "Do not create a customer-action deficiency solely from provider_scrape or search_index evidence. If the direct crawler did not inspect the live site, customerActionCapability should normally be unknown unless another supplied evidence source independently establishes it.",
-  "Do not choose REBUILD_CANDIDATE from provider_scrape or search_index evidence alone. A rebuild decision requires stronger direct evidence. However, direct measured performance plus coherent current provider extraction or substantial same-domain index evidence may support OPTIMIZATION_CANDIDATE.",
+  "Provider-scrape or search-index evidence by itself cannot support REBUILD_CANDIDATE. Direct measured performance may be combined with current provider extraction and substantial same-domain index evidence when multiple independent material limitations support an asset-level rebuild case. Unknown interactive capabilities must never be used as rebuild evidence.",
   "Enrichment notes describe Lead Miner's enrichment process and may contain historical crawler failures. They are not independent visitor-reachability evidence.",
   "Assess demand alignment semantically using the lead keyword and supplied website evidence. Exact keyword matching is not required.",
   "Assess business representation by how meaningfully the site explains the business and its apparent services. Do not require a particular number of pages.",
@@ -171,7 +172,12 @@ const HARD_RESEARCH_RULES = [
   "Do not penalize a site merely for lacking a blog, FAQs, testimonials, live chat, online booking, displayed pricing, location pages, individual service pages, schema markup, or a specific CTA type.",
   "Do not use aesthetic preference, 'dated' appearance by itself, generic modernization, CRO ideas, or optional best practices as rebuild qualification.",
   "Several meaningful limitations may combine into a substantial business-asset gap even when nothing is technically broken.",
-  "REBUILD_CANDIDATE means the observable capability gap is substantial enough that a new implementation is a reasonable option. OPTIMIZATION_CANDIDATE means the asset appears fundamentally capable but has material fixable limitations that do not clearly justify replacement. NO_MATERIAL_OPPORTUNITY means the supplied evidence does not show a meaningful enough gap. NEEDS_REVIEW means the evidence is too incomplete or conflicting to establish even an optimization/no-opportunity classification safely.",
+  "REBUILD_CANDIDATE means direct or strongly corroborated evidence shows multiple material limitations across the business asset, or a severe structural limitation, such that a new implementation is a reasonable alternative to piecemeal repairs. It should not require the existing site to be completely broken.",
+  "OPTIMIZATION_CANDIDATE means the asset is fundamentally capable but has one or more material limitations substantial enough to justify a meaningful optimization/development engagement without replacing the implementation.",
+  "A trivial housekeeping task is not an optimization opportunity for Lead Miner. If the only meaningful remedy is changing contact text, replacing a placeholder email, fixing a typo, changing one label, or another small content/configuration edit, choose NO_MATERIAL_OPPORTUNITY unless broader supplied evidence independently establishes a material web-development opportunity.",
+  "NO_MATERIAL_OPPORTUNITY means the supplied evidence does not show a meaningful enough web-development opportunity, including cases where the only observed issue is a narrow housekeeping fix.",
+  "NEEDS_REVIEW means the evidence is too incomplete or conflicting to establish a rebuild, material optimization, or no-opportunity classification safely.",
+  "When choosing between rebuild and optimization, ask whether the observed limitations are isolated fixes on an otherwise capable asset or whether they combine into an asset-level gap. Do not systematically prefer optimization simply because individual fixes are imaginable.",
   "Identify both the strongest capabilities and the most important limitations in the research summary.",
   "Research does not choose an outreach angle, estimate ability to pay, assign sales urgency, or recommend messaging.",
   "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled direct page summaries, provider_scrape for current provider-extracted page text, search_index for indexed first-party titles/snippets, and site_coverage for bounded crawl/sitemap evidence.",
@@ -226,6 +232,41 @@ function hasMaterialPerformanceConstraint(performanceAssessment: PerformanceAsse
   return performanceAssessment.lcpBand === "poor" || performanceAssessment.poorMetricCount >= 2;
 }
 
+function materialFindings(result: ResearchResult) {
+  return result.findings.filter((finding) => finding.confidence >= 0.7 && finding.significance !== "low");
+}
+
+function constrainedDimensionCount(result: ResearchResult) {
+  return Object.values(result.dimensions).filter((dimension) => dimension.rating === "weak" || dimension.rating === "constrained").length;
+}
+
+function calibrateDirectDecision(result: ResearchResult): ResearchResult {
+  if (result.decision !== "optimization_candidate" || result.assetStrength !== "weak" || result.confidence < 0.7) return result;
+  const material = materialFindings(result);
+  const categories = new Set(material.map((finding) => finding.category));
+  const highCount = material.filter((finding) => finding.significance === "high").length;
+  if (material.length < 2 || categories.size < 2 || highCount < 1 || constrainedDimensionCount(result) < 3) return result;
+  return {
+    ...result,
+    decision: "rebuild_candidate",
+    decisionReason: "Rebuild candidate because direct website inspection shows multiple material limitations across distinct business-asset dimensions, including at least one high-significance limitation, and the overall asset is assessed as weak. The evidence supports evaluating replacement rather than treating the opportunity as a set of isolated optimizations.",
+  };
+}
+
+function supportsFallbackRebuild(
+  result: ResearchResult,
+  providerAvailable: boolean,
+  indexedAvailable: boolean,
+  performanceAssessment: PerformanceAssessment,
+) {
+  if (result.decision !== "rebuild_candidate" || result.assetStrength !== "weak" || result.confidence < 0.7) return false;
+  if (!providerAvailable || !indexedAvailable || !hasMaterialPerformanceConstraint(performanceAssessment)) return false;
+  const material = materialFindings(result);
+  const categories = new Set(material.map((finding) => finding.category));
+  const hasNonPerformanceFinding = material.some((finding) => finding.category !== "performance");
+  return material.length >= 2 && categories.size >= 2 && hasNonPerformanceFinding;
+}
+
 export function applyCrawlerFailureSafety(
   result: ResearchResult,
   website: BusinessAssetResearchPacket,
@@ -242,20 +283,18 @@ export function applyCrawlerFailureSafety(
       .filter((finding) => !isEvidenceGapFinding(finding)),
   };
 
-  if (website.finalUrl && !website.fetchError) return safeBase;
+  if (website.finalUrl && !website.fetchError) return calibrateDirectDecision(safeBase);
 
   const providerAvailable = Boolean(website.providerScrapeEvidence?.succeeded && website.providerScrapeEvidence.wordCount >= 40);
   const indexedAvailable = website.searchIndexEvidence.succeeded && website.searchIndexEvidence.pages.length >= 3;
-  const materialPerformanceConstraint = hasMaterialPerformanceConstraint(performanceAssessment);
 
   if (providerAvailable) {
-    const blockedRebuild = safeBase.decision === "rebuild_candidate";
-    const shouldFloorOptimization = materialPerformanceConstraint
-      && ["rebuild_candidate", "needs_review", "no_material_opportunity"].includes(safeBase.decision);
+    const preserveRebuild = supportsFallbackRebuild(safeBase, providerAvailable, indexedAvailable, performanceAssessment);
+    const downgradeRebuild = safeBase.decision === "rebuild_candidate" && !preserveRebuild;
     return {
       ...safeBase,
-      decision: shouldFloorOptimization ? "optimization_candidate" : safeBase.decision,
-      assetStrength: shouldFloorOptimization ? "constrained" : safeBase.assetStrength,
+      decision: downgradeRebuild ? "optimization_candidate" : safeBase.decision,
+      assetStrength: downgradeRebuild ? "constrained" : safeBase.assetStrength,
       dimensions: {
         ...safeBase.dimensions,
         demandAlignment: capDimension(safeBase.dimensions.demandAlignment, "provider_scrape"),
@@ -266,20 +305,19 @@ export function applyCrawlerFailureSafety(
           ? capDimension(safeBase.dimensions.siteMaturity, "search_index")
           : capDimension(safeBase.dimensions.siteMaturity, "provider_scrape"),
       },
-      decisionReason: blockedRebuild && shouldFloorOptimization
-        ? "Optimization candidate because direct performance measurements show a material constraint and current provider extraction confirms a substantive live page, while Lead Miner's own TLS-verified crawler could not complete the certificate chain. A rebuild conclusion is not supported without stronger direct site inspection."
+      decisionReason: downgradeRebuild
+        ? "Optimization candidate because the model identified a rebuild-level concern, but the available fallback evidence does not establish enough independent current limitations to support replacement safely. Current provider extraction still supports a material optimization assessment."
         : safeBase.decisionReason,
       confidence: Math.min(safeBase.confidence, 0.8),
     };
   }
 
   if (indexedAvailable) {
-    const shouldFloorOptimization = materialPerformanceConstraint
-      && ["rebuild_candidate", "needs_review", "no_material_opportunity"].includes(safeBase.decision);
+    const downgradeRebuild = safeBase.decision === "rebuild_candidate";
     return {
       ...safeBase,
-      decision: shouldFloorOptimization ? "optimization_candidate" : safeBase.decision,
-      assetStrength: shouldFloorOptimization ? "constrained" : safeBase.assetStrength,
+      decision: downgradeRebuild ? "optimization_candidate" : safeBase.decision,
+      assetStrength: downgradeRebuild ? "constrained" : safeBase.assetStrength,
       dimensions: {
         ...safeBase.dimensions,
         demandAlignment: capDimension(safeBase.dimensions.demandAlignment, "search_index"),
@@ -288,8 +326,8 @@ export function applyCrawlerFailureSafety(
         acquisitionReadiness: capDimension(safeBase.dimensions.acquisitionReadiness, "search_index"),
         siteMaturity: capDimension(safeBase.dimensions.siteMaturity, "search_index"),
       },
-      decisionReason: shouldFloorOptimization
-        ? "Optimization candidate because direct performance measurements show a material performance constraint while same-domain indexed evidence indicates a substantial existing website. Direct site inspection is still required before a rebuild conclusion can be supported."
+      decisionReason: downgradeRebuild
+        ? "Optimization candidate because same-domain index evidence and direct performance measurements can establish a material limitation, but index evidence alone is not strong enough to support a rebuild conclusion."
         : safeBase.decisionReason,
       confidence: Math.min(safeBase.confidence, 0.65),
     };
