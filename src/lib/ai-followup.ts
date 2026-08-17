@@ -2,6 +2,12 @@ import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
 import { isBreakupSequenceNumber } from "./outreach-sequence.js";
+import {
+  containsPlaceholderText,
+  isPlaceholderBusinessName,
+  normalizeOutreachBody,
+  outreachDraftNeedsRegeneration,
+} from "./ai-outreach.js";
 
 const FollowUpSchema = z.object({
   bodyText: z.string().min(1).max(2200),
@@ -10,7 +16,7 @@ const FollowUpSchema = z.object({
 });
 
 export type FollowUpDraft = z.infer<typeof FollowUpSchema>;
-export const FOLLOWUP_PROMPT_VERSION = "followup-v2";
+export const FOLLOWUP_PROMPT_VERSION = "followup-v3";
 
 function jsonSchema() {
   return {
@@ -39,8 +45,13 @@ export async function generateFollowUp(input: {
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const packet = {
     sequenceNumber: input.sequenceNumber,
-    businessName: input.businessName,
+    businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
+    recipientPolicy: {
+      verifiedPersonNameAvailable: false,
+      salutationAllowed: false,
+      openingRequirement: "Continue the existing thread directly; do not greet the business, a fabricated team, or an invented person.",
+    },
     researchSummary: input.researchSummary,
     primaryOutreachAngle: input.primaryOutreachAngle,
     problems: input.problems.slice(0, 5),
@@ -48,7 +59,7 @@ export async function generateFollowUp(input: {
   };
   const followUpNumber = input.sequenceNumber - 1;
   const isBreakup = isBreakupSequenceNumber(input.sequenceNumber);
-  const commonRules = "Write only the body of a follow-up in the existing thread. Use only supplied evidence and prior messages. Never invent facts, metrics, traffic, revenue, ad spend, customer behavior, or a new website problem. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, benchmark scores, milliseconds, or technical performance scores. Do not use generic phrases such as just following up, checking in, circling back, touching base, or bumping this. Keep it concise and natural. Do not generate a subject line.";
+  const commonRules = "Write only the body of a follow-up in the existing thread. Use only supplied evidence and prior messages. Never invent facts, metrics, traffic, revenue, ad spend, customer behavior, or a new website problem. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, benchmark scores, milliseconds, or technical performance scores. Do not use generic phrases such as just following up, checking in, circling back, touching base, or bumping this. No verified person name is supplied, so do not write a salutation or greet the business/team. Never emit placeholder text such as [Name], Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD. Continue directly from the prior thread. Keep it concise and natural. Do not generate a subject line.";
   const sequenceRules = isBreakup
     ? "This is follow-up #4, the terminal breakup message. Close the loop respectfully. Do not introduce a new problem, a new pitch, a new proof point, or manufactured urgency. Do not guilt, pressure, challenge, or shame the prospect. Do not ask for a meeting or consultation. Make clear this is the last outreach for now and leave the door open if timing changes. Do not imply another follow-up will occur."
     : "This is follow-up #1, #2, or #3. Continue the existing thread without inventing a new problem. Use one low-friction CTA appropriate to the prior outreach.";
@@ -69,5 +80,10 @@ export async function generateFollowUp(input: {
   const data = await response.json() as any;
   const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
   if (!raw) throw new Error("OpenAI returned no follow-up output");
-  return { draft: FollowUpSchema.parse(JSON.parse(raw)), model: data.model ?? model, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens };
+  const parsed = FollowUpSchema.parse(JSON.parse(raw));
+  const draft: FollowUpDraft = { ...parsed, bodyText: normalizeOutreachBody(parsed.bodyText) };
+  if (containsPlaceholderText(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up contained placeholder text or a fabricated placeholder identity");
+  if (outreachDraftNeedsRegeneration(draft.bodyText)) throw new Error("OpenAI follow-up used unsafe generic personalization or minimizing remediation language");
+  if (/^\s*(?:just following up|checking in|circling back|touching base|bumping this|wanted to follow up)/i.test(draft.bodyText)) throw new Error("OpenAI follow-up used a generic follow-up opening");
+  return { draft, model: data.model ?? model, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens };
 }
