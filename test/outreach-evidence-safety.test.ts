@@ -12,8 +12,13 @@ import {
   hasUnverifiedSalutation,
   isPlaceholderBusinessName,
   normalizeOutreachBody,
+  OUTREACH_PROMPT_VERSION,
   outreachDraftNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
+
+test("outreach prompt version is v12", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v12");
+});
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
   await assert.rejects(
@@ -49,12 +54,37 @@ test("outreach drafting rejects old stored claims that a contact page has no for
   );
 });
 
+test("outreach drafting rejects a selected finding that still requires rendered visitor verification", async () => {
+  await assert.rejects(
+    () => generateOutreachDraft({
+      businessName: "Texas Pride Foundation Repair",
+      domain: "texaspridefoundation.com",
+      keyword: "foundation repair",
+      senderName: "Brian Woodson",
+      senderEmail: "leads@brianwoodson.dev",
+      primaryOutreachAngle: "Unrelated kitchen template content makes the site appear unfinished",
+      researchSummary: "Template-content concern",
+      qualificationReason: "Possible credibility issue",
+      selectedFinding: {
+        id: 10,
+        category: "credibility",
+        title: "Unrelated kitchen-design template content remains",
+        evidence: "Kitchen-design copy appears in static HTML",
+        assetCapability: "Because the evidence is static HTML rather than rendered-browser output, the exact visitor-facing presentation should be verified.",
+        confidence: 0.96,
+        significance: "high",
+      },
+    }, "unused-model", 0.7, "Write a concise evidence-backed email."),
+    /still requires visitor-facing verification/,
+  );
+});
+
 test("representative simple-cleanup outreach is rejected by deterministic draft safety", () => {
   assert.equal(containsMinimizingRemediation("A simple cleanup—one primary phone, one monitored email, and consistent contact details across the site—could make it easier for prospects to reach you."), true);
 });
 
 test("problem-and-consultation framing is not rejected as trivial remediation", () => {
-  assert.equal(containsMinimizingRemediation("I noticed the site gives visitors conflicting contact information, which can create uncertainty at the point they are deciding whether to reach out. Would you be open to a brief consultation to look at whether the website is doing enough to support new inquiries?"), false);
+  assert.equal(containsMinimizingRemediation("I noticed the site gives visitors conflicting contact information, which can create uncertainty at the point they are deciding whether to reach out. Is that something you want me to show you?"), false);
 });
 
 test("neutral greeting is allowed and preserved", () => {
@@ -91,16 +121,15 @@ test("existing drafts without a neutral greeting require regeneration", () => {
   assert.equal(outreachDraftNeedsRegeneration("The mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.", "A question about the site"), true);
 });
 
-test("specific observation with natural sender context and simple CTA remains acceptable", () => {
-  const body = "Hi,\n\nI noticed the Weatherford page takes a while to show the quote options. Someone comparing roofers may decide not to wait.\n\nI build custom websites for service businesses, and this is the kind of issue I work on.\n\nWould you be open to a quick conversation about it?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the Weatherford page", "Would you be open to a quick conversation about it?"), false);
+test("specific observation with neutral greeting and natural CTA remains acceptable", () => {
+  const body = "Hi,\n\nThe mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.\n\nI build custom websites for service businesses, so this kind of issue stands out to me.\n\nWant me to send over what I found?\n\nBrian";
+  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the site", "Want me to send over what I found?"), false);
 });
 
-test("sender context does not require the same full-name bio sentence", () => {
-  assert.equal(containsSenderIdentity("I’m Brian Woodson, a web developer who builds custom websites for service businesses.", "Brian Woodson"), true);
-  assert.equal(containsSenderIdentity("I build custom websites for service businesses, and this is the kind of issue I work on.", "Brian Woodson"), true);
-  assert.equal(containsSenderIdentity("I'm a web developer focused on service-business websites.", "Brian Woodson"), true);
-  assert.equal(containsSenderIdentity("The page takes a while to load.", "Brian Woodson"), false);
+test("sender identity is recognized from natural configured context", () => {
+  assert.equal(containsSenderIdentity("I build custom websites for service businesses, so this stood out to me.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("I'm a web developer and this stood out to me.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("This stood out to me.", "Brian Woodson"), false);
 });
 
 test("prospect-facing consultant jargon is rejected", () => {
@@ -108,16 +137,19 @@ test("prospect-facing consultant jargon is rejected", () => {
   assert.equal(containsConsultantJargon("Someone comparing roofers may leave before reaching the estimate form."), false);
 });
 
-test("meta, fragment, and generic website-improvement CTAs require regeneration while simple conversation CTAs pass", () => {
+test("meta, fragment, generic, and recurring CTA formulas require regeneration", () => {
   assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
   assert.equal(ctaNeedsRegeneration("Brief consultation about improving the site."), true);
-  assert.equal(ctaNeedsRegeneration("Would you be open to a brief consultation about improving the site's responsiveness?"), true);
-  assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), false);
-  assert.equal(ctaNeedsRegeneration("Would it be worth looking at what a homeowner sees before they reach the estimate form?"), false);
+  assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), true);
+  assert.equal(ctaNeedsRegeneration("Would it be useful to look at this?"), true);
+  assert.equal(ctaNeedsRegeneration("Would it be worth reviewing?"), true);
+  assert.equal(ctaNeedsRegeneration("Want me to send over what I found?"), false);
+  assert.equal(ctaNeedsRegeneration("Is this something you'd want me to show you?"), false);
+  assert.equal(ctaNeedsRegeneration("Does that match what you've noticed on the site?"), false);
 });
 
 test("stored drafts can use CTA validation when CTA is available", () => {
-  const body = "Hi,\n\nThe homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.\n\nI build custom websites for service businesses.";
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Invite a brief consultation about improving the site."), true);
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would you be open to a quick conversation about it?"), false);
+  const body = "Hi,\n\nThe homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.\n\nI build custom websites for service businesses, so this stood out to me.";
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would you be open to a quick conversation about it?"), true);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Want me to send over what I found?"), false);
 });
