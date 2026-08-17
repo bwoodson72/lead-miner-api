@@ -10,7 +10,7 @@ import {
 
 export const LEGACY_OUTREACH_INSTRUCTIONS = "Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.";
 
-export const DEFAULT_OUTREACH_INSTRUCTIONS = [
+export const PREVIOUS_DEFAULT_OUTREACH_INSTRUCTIONS = [
   "Write Touch 1 as a short email Brian Woodson would personally type to a business owner after noticing something on their website.",
   "The goal is to get a reply or permission to send the details. Do not try to sell the project, book a consultation, or ask for a meeting in Touch 1.",
   "Use the supplied verified observation and private psychological strategy. Make one point.",
@@ -18,6 +18,20 @@ export const DEFAULT_OUTREACH_INSTRUCTIONS = [
   "Let persuasion come from self-interest, loss aversion, competitive choice, trust, protecting money already being spent, or making the next step easier. Do not name or explain the persuasion technique in the email.",
   "Write in ordinary spoken English. It should sound like Brian noticed something, thought the owner should know, and sent a quick email.",
   "Briefly establish why Brian notices this kind of thing: he builds custom websites for service businesses. Do not turn this into a bio or credentials paragraph.",
+  "Do not explain the whole diagnosis or the fix. Leave enough unanswered that replying is worthwhile.",
+  "Start with Hi, and end with one small, low-pressure question that makes replying easy. Sign Brian.",
+  "Keep it roughly 55 to 100 words. Never invent facts, losses, metrics, urgency, recipient identity, or customer behavior. Never mention audit or performance-testing terminology.",
+].join(" ");
+
+export const DEFAULT_OUTREACH_INSTRUCTIONS = [
+  "Write Touch 1 as a short email Brian Woodson would personally type to a business owner after noticing something on their website.",
+  "The goal is to get a reply or permission to send the details. Do not try to sell the project, book a consultation, or ask for a meeting in Touch 1.",
+  "Use the supplied verified observation and private psychological strategy. Make one point.",
+  "Show why the observation may matter to the owner in a way they can easily picture. Use the supplied owner stake and buyer moment only when they fit naturally. State possible customer behavior as a possibility, never as something known to have happened.",
+  "Let persuasion come from self-interest, loss aversion, competitive choice, trust, protecting money already being spent, or making the next step easier. Do not name or explain the persuasion technique in the email.",
+  "Write in ordinary spoken English. It should sound like Brian noticed something, thought the owner should know, and sent a quick email.",
+  "Give brief natural context that Brian works on websites or web development for service businesses, but vary the wording to fit the message. Do not force the same sender sentence into every email and do not turn it into a bio.",
+  "Treat exact performance measurements as private evidence. Do not put numeric or spelled-out seconds, milliseconds, percentages, scores, or benchmark values in the prospect-facing subject or message; describe the experience qualitatively.",
   "Do not explain the whole diagnosis or the fix. Leave enough unanswered that replying is worthwhile.",
   "Start with Hi, and end with one small, low-pressure question that makes replying easy. Sign Brian.",
   "Keep it roughly 55 to 100 words. Never invent facts, losses, metrics, urgency, recipient identity, or customer behavior. Never mention audit or performance-testing terminology.",
@@ -96,7 +110,7 @@ export async function getAppSettings(prisma: PrismaClient) {
   const delays = normalizeFollowUpDelays(settings.followUpDelaysDays);
   const delaysChanged = JSON.stringify(settings.followUpDelaysDays) !== JSON.stringify(delays);
   const followUpInstructionsChanged = settings.followUpInstructions === LEGACY_FOLLOW_UP_INSTRUCTIONS;
-  const outreachInstructionsChanged = settings.outreachInstructions === LEGACY_OUTREACH_INSTRUCTIONS;
+  const outreachInstructionsChanged = settings.outreachInstructions === LEGACY_OUTREACH_INSTRUCTIONS || settings.outreachInstructions === PREVIOUS_DEFAULT_OUTREACH_INSTRUCTIONS;
 
   if (delaysChanged || followUpInstructionsChanged || outreachInstructionsChanged) {
     settings = await prisma.appSettings.update({
