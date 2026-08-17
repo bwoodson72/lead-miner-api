@@ -1,32 +1,64 @@
 import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
+import {
+  containsUnsupportedFormAbsenceClaim,
+  containsUnverifiedVisitorVisibility,
+} from "./research-evidence-safety.js";
+
+const PsychologicalLeverSchema = z.enum([
+  "loss_aversion",
+  "self_interest",
+  "competitive_choice",
+  "protect_existing_spend",
+  "trust",
+  "ease_of_action",
+]);
 
 const OutreachAngleSchema = z.object({
   findingId: z.number().int().positive(),
-  angle: z.string().min(1).max(500),
+  observation: z.string().min(1).max(500),
+  ownerStake: z.string().min(1).max(700),
+  buyerMoment: z.string().min(1).max(700).nullable(),
+  psychologicalLever: PsychologicalLeverSchema,
   rationale: z.string().min(1).max(1200),
   confidence: z.number().min(0).max(1),
 });
 
 export type OutreachAngle = z.infer<typeof OutreachAngleSchema>;
-export const OUTREACH_ANGLE_PROMPT_VERSION = "outreach-angle-v2";
+export type OutreachPsychology = Pick<OutreachAngle, "ownerStake" | "buyerMoment" | "psychologicalLever">;
+export const OUTREACH_ANGLE_PROMPT_VERSION = "outreach-angle-v3";
 
 function jsonSchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["findingId", "angle", "rationale", "confidence"],
+    required: ["findingId", "observation", "ownerStake", "buyerMoment", "psychologicalLever", "rationale", "confidence"],
     properties: {
       findingId: { type: "integer", minimum: 1 },
-      angle: { type: "string", maxLength: 500 },
+      observation: { type: "string", maxLength: 500 },
+      ownerStake: { type: "string", maxLength: 700 },
+      buyerMoment: { type: ["string", "null"], maxLength: 700 },
+      psychologicalLever: {
+        type: "string",
+        enum: ["loss_aversion", "self_interest", "competitive_choice", "protect_existing_spend", "trust", "ease_of_action"],
+      },
       rationale: { type: "string", maxLength: 1200 },
       confidence: { type: "number", minimum: 0, maximum: 1 },
     },
   };
 }
 
-type AngleFinding = { id: number; category: string; title: string; evidence: string; assetCapability: string; confidence: number; significance: string; evidenceSources: unknown };
+type AngleFinding = {
+  id: number;
+  category: string;
+  title: string;
+  evidence: string;
+  assetCapability: string;
+  confidence: number;
+  significance: string;
+  evidenceSources: unknown;
+};
 
 export function isLikelyHousekeepingFinding(finding: Pick<AngleFinding, "title" | "evidence" | "assetCapability" | "category">) {
   const text = `${finding.title} ${finding.evidence} ${finding.assetCapability}`;
@@ -34,16 +66,48 @@ export function isLikelyHousekeepingFinding(finding: Pick<AngleFinding, "title" 
   return /placeholder\s+(?:email|phone)|multiple\s+(?:different\s+)?phone numbers?|different\s+phone numbers?|inconsistent\s+(?:contact|phone|email)|contact details?\s+(?:are\s+)?inconsistent|replace\s+(?:a\s+)?placeholder|update\s+(?:the\s+)?contact details?|one primary phone|one monitored email/i.test(text);
 }
 
+function isSafeOutreachFinding(finding: AngleFinding) {
+  const text = `${finding.title} ${finding.evidence} ${finding.assetCapability}`;
+  return !containsUnsupportedFormAbsenceClaim(text) && !containsUnverifiedVisitorVisibility(text);
+}
+
 function outreachCandidates(findings: AngleFinding[]) {
-  const material = findings.filter((finding) => finding.significance !== "low");
+  const safe = findings.filter(isSafeOutreachFinding);
+  const material = safe.filter((finding) => finding.significance !== "low");
   const development = material.filter((finding) => !isLikelyHousekeepingFinding(finding));
   return development.length ? development : material;
+}
+
+export function encodeOutreachPsychology(result: OutreachAngle) {
+  return JSON.stringify({
+    version: OUTREACH_ANGLE_PROMPT_VERSION,
+    ownerStake: result.ownerStake,
+    buyerMoment: result.buyerMoment,
+    psychologicalLever: result.psychologicalLever,
+    rationale: result.rationale,
+  });
+}
+
+export function decodeOutreachPsychology(value: string | null | undefined): OutreachPsychology | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const result = z.object({
+      ownerStake: z.string().min(1),
+      buyerMoment: z.string().min(1).nullable(),
+      psychologicalLever: PsychologicalLeverSchema,
+    }).safeParse(parsed);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function selectOutreachAngle(input: {
   businessName: string | null;
   domain: string;
   keyword: string;
+  adSource?: string | null;
   decision: string;
   assetStrength: string;
   researchSummary: string;
@@ -51,21 +115,25 @@ export async function selectOutreachAngle(input: {
 }, model: string) {
   if (!input.findings.length) throw new Error("No material findings are available for outreach angle selection");
   const candidates = outreachCandidates(input.findings);
-  if (!candidates.length) throw new Error("No outreach finding represents a material web-development opportunity");
+  if (!candidates.length) throw new Error("No verified outreach finding represents a material web-development opportunity");
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
 
   const hardRules = [
-    "Select exactly one supplied material finding as the primary outreach angle.",
-    "The findingId must be one of the supplied finding IDs.",
-    "Do not invent another website problem, business fact, metric, consequence, urgency, ad spend, traffic level, revenue impact, or customer behavior.",
-    "Prefer a finding that is concrete, consequential to the website as a business asset, high-confidence, and naturally aligned with meaningful custom web development or substantial optimization.",
-    "Do not choose a narrow housekeeping issue such as replacing placeholder contact text, reconciling phone numbers, fixing a typo, or changing one label when a stronger development-level finding is available.",
-    "For a rebuild candidate, prefer a finding that works as a concrete symptom of the broader weak business asset rather than a finding whose obvious remedy is a tiny standalone edit.",
-    "For an optimization candidate, prefer the limitation with the clearest material effect on the site's ability to represent the business, support acquisition, or help visitors take action.",
-    "The angle is prospect-facing framing, not research prose. Translate technical evidence into plain business impact without exposing Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, milliseconds, or benchmark terminology.",
-    "Do not write an email, CTA, subject line, proposed fix, or sales script. Only choose the evidence-backed angle and explain internally why it is the best one.",
-    "Do not choose an evidence gap, crawler limitation, manual-validation request, or uncertainty as the angle.",
+    "This is private strategy work for a first cold email, not prospect-facing copy.",
+    "Select exactly one supplied material finding. The findingId must be one of the supplied finding IDs.",
+    "Turn the finding into a short factual observation in ordinary language. observation must describe only what was noticed; do not put the consequence, sales pitch, or proposed fix in it.",
+    "Identify one ownerStake: the simplest believable thing the owner could gain, protect, or lose because of this observation. Phrase it as a possibility unless the evidence proves the outcome.",
+    "Choose one primary psychologicalLever: loss_aversion, self_interest, competitive_choice, protect_existing_spend, trust, or ease_of_action. Choose the lever that naturally follows from the evidence rather than forcing a technique.",
+    "buyerMoment is optional. Use one only when a short, normal customer situation makes the consequence easy to picture. Never state imagined customer behavior as an observed fact.",
+    "For paid-ad or paid-landing-page evidence, prefer protect_existing_spend when the supplied evidence actually establishes paid acquisition context.",
+    "For comparison-sensitive local service purchases, loss_aversion or competitive_choice often fit when a verified website problem could plausibly make the next company easier to choose.",
+    "Use self_interest when the clearest stake is making it easier to understand the offer, contact the company, request an estimate, or get more value from traffic already reaching the site.",
+    "Use trust only when the supplied finding genuinely concerns credibility, presentation, identity, or confidence.",
+    "Do not invent traffic loss, lead loss, revenue loss, rankings, ad spend amounts, urgency, customer behavior, or business plans.",
+    "Do not use consultant language such as business asset, acquisition asset, acquisition path, conversion path, material limitation, optimization engagement, customer journey, visitor experience, high-intent visitor, or friction in observation, ownerStake, or buyerMoment.",
+    "Do not expose Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, milliseconds, crawler terminology, or evidence-source terminology in observation, ownerStake, or buyerMoment.",
+    "Do not write an email, subject line, CTA, or solution. The next stage will write the email from these private notes.",
     "Return only the required structured result.",
   ].join(" ");
 
@@ -76,7 +144,20 @@ export async function selectOutreachAngle(input: {
       model,
       input: [
         { role: "system", content: [{ type: "input_text", text: hardRules }] },
-        { role: "user", content: [{ type: "input_text", text: `Choose the strongest outreach angle from this qualified business-asset evidence:\n${JSON.stringify({ ...input, findings: candidates })}` }] },
+        {
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: `Choose the strongest verified finding and the simplest psychology for a first cold email. These are private notes, not copy:\n${JSON.stringify({
+              businessName: input.businessName,
+              domain: input.domain,
+              businessType: input.keyword,
+              adSource: input.adSource ?? null,
+              qualificationDecision: input.decision,
+              findings: candidates,
+            })}`,
+          }],
+        },
       ],
       text: { format: { type: "json_schema", name: "outreach_angle", strict: true, schema: jsonSchema() } },
     }),
@@ -87,5 +168,11 @@ export async function selectOutreachAngle(input: {
   if (!raw) throw new Error("OpenAI returned no outreach angle");
   const result = OutreachAngleSchema.parse(JSON.parse(raw));
   if (!candidates.some((finding) => finding.id === result.findingId)) throw new Error("OpenAI selected a finding that was not supplied as an eligible outreach candidate");
-  return { result, model: data.model ?? model, inputTokens: data.usage?.input_tokens, cachedTokens: data.usage?.input_tokens_details?.cached_tokens, outputTokens: data.usage?.output_tokens };
+  return {
+    result,
+    model: data.model ?? model,
+    inputTokens: data.usage?.input_tokens,
+    cachedTokens: data.usage?.input_tokens_details?.cached_tokens,
+    outputTokens: data.usage?.output_tokens,
+  };
 }
