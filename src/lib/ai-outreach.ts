@@ -13,7 +13,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v6";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v7";
 
 function schema() {
   return {
@@ -49,14 +49,25 @@ export function sanitizeProspectFacingEvidence(value: string | null): string | n
     .trim();
 }
 
+export function containsMinimizingRemediation(value: string) {
+  return /\b(?:simple|quick|easy|small)\s+(?:cleanup|fix|change|update|adjustment)|\b(?:just|simply)\s+(?:change|update|replace|add|remove)|\bone primary phone\b|\bone monitored email\b/i.test(value);
+}
+
 const HARD_OUTREACH_RULES = [
-  "Write the first cold email from exactly one selected, evidence-backed material finding.",
-  "Use only the supplied selected finding and selected outreach angle. Do not introduce a second website problem.",
+  "Write the first cold email from exactly one selected, evidence-backed material finding as the concrete hook.",
+  "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
   "Never invent metrics, traffic loss, revenue loss, ad spend, customer behavior, rankings, business plans, growth, or facts not supplied.",
   "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, benchmark names, crawler failures, evidence sources, or internal Lead Miner terminology.",
-  "Translate technical evidence into ordinary business language without overstating the consequence.",
+  "Translate technical evidence into ordinary business language without overstating the consequence. Use conditional business-impact language when actual visitor behavior is not observed.",
+  "Do not prescribe the implementation fix in the cold email. Do not give the prospect a checklist, step-by-step remedy, or DIY instructions. The purpose is to surface the business problem and open a consultation, not solve it in the email.",
+  "Never minimize the opportunity with language such as simple cleanup, quick fix, easy change, small update, just change, simply replace, one primary phone, or one monitored email.",
+  "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. The CTA should invite a brief consultation about whether rebuilding the site would make sense.",
+  "If qualificationDecision is optimization_candidate, frame the selected finding as a material limitation worth improving without implying that the entire site necessarily needs replacement. The CTA should invite a brief consultation about improving the site.",
+  "Do not pitch a trivial content-maintenance service. If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
+  "Keep the email concise, specific, and natural. Prefer roughly 80 to 150 words unless the evidence genuinely requires less.",
   "Do not use fake familiarity, generic compliments, placeholders, guilt, or manufactured urgency.",
-  "The goal is a low-friction response or consultation conversation, not a hard close. Use one CTA.",
+  "Do not invent a customer persona or situation beyond the supplied business/keyword context.",
+  "Use one CTA. Prefer a brief consultation-oriented question over vague language such as tightening this up or having a conversation about the issue.",
   "Return only the required structured draft.",
 ].join(" ");
 
@@ -70,6 +81,8 @@ export async function generateOutreachDraft(input: {
   primaryOutreachAngle: string | null;
   researchSummary: string | null;
   qualificationReason: string | null;
+  qualificationDecision?: string | null;
+  assetStrength?: string | null;
   selectedFinding?: SelectedFinding;
   problems?: LegacyProblem[];
 }, model: string, minFindingConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; cachedTokens?: number; outputTokens?: number }> {
@@ -91,6 +104,12 @@ export async function generateOutreachDraft(input: {
     businessName: input.businessName,
     domain: input.domain,
     keyword: input.keyword,
+    qualificationContext: {
+      decision: input.qualificationDecision ?? null,
+      assetStrength: input.assetStrength ?? null,
+      researchSummary: sanitizeProspectFacingEvidence(input.researchSummary),
+      decisionReason: sanitizeProspectFacingEvidence(input.qualificationReason),
+    },
     selectedOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle) ?? sanitizeProspectFacingEvidence(selectedFinding.title),
     selectedFinding: {
       id: selectedFinding.id,
@@ -120,8 +139,12 @@ export async function generateOutreachDraft(input: {
   const data = await response.json() as any;
   const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
   if (!raw) throw new Error("OpenAI returned no outreach draft");
+  const draft = OutreachDraftSchema.parse(JSON.parse(raw));
+  if (containsMinimizingRemediation(draft.bodyText)) {
+    throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
+  }
   return {
-    draft: OutreachDraftSchema.parse(JSON.parse(raw)),
+    draft,
     model: data.model ?? model,
     inputTokens: data.usage?.input_tokens,
     cachedTokens: data.usage?.input_tokens_details?.cached_tokens,
