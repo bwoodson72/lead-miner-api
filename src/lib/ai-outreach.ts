@@ -13,7 +13,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v7";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v8";
 
 function schema() {
   return {
@@ -53,6 +53,39 @@ export function containsMinimizingRemediation(value: string) {
   return /\b(?:simple|quick|easy|small)\s+(?:cleanup|fix|change|update|adjustment)|\b(?:just|simply)\s+(?:change|update|replace|add|remove)|\bone primary phone\b|\bone monitored email\b/i.test(value);
 }
 
+export function isPlaceholderBusinessName(value: string | null | undefined) {
+  if (!value) return false;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return /^(?:acme(?:\s+(?:roofing|company|business|services?|inc\.?))?|example(?:\s+(?:company|business|services?|roofing|contractor))?|sample(?:\s+(?:company|business|services?))?|test(?:\s+(?:company|business|services?))?|your company|company name|business name|placeholder|unknown|tbd|n\/?a)$/i.test(normalized);
+}
+
+export function containsPlaceholderText(value: string) {
+  return /\[(?:[^\]]{0,30}(?:name|company|business|email|phone)[^\]]{0,30})\]|\{(?:[^}]{0,30}(?:name|company|business|email|phone)[^}]{0,30})\}|<(?:[^>]{0,30}(?:name|company|business|email|phone)[^>]{0,30})>|\b(?:acme roofing|example company|sample company|your company|company name|business name|placeholder|tbd)\b/i.test(value);
+}
+
+export function hasUnverifiedSalutation(value: string) {
+  return /^\s*(?:hi|hello|hey|dear)\b[^\r\n]{0,140}(?:,|!|\r?\n)/i.test(value);
+}
+
+export function normalizeOutreachBody(value: string) {
+  return value
+    .trim()
+    .replace(/^\s*(?:hi|hello|hey|dear)(?:\s+[^,\r\n]{0,140})?\s*,\s*(?:\r?\n\s*)*/i, "")
+    .replace(/^\s*(?:hi|hello|hey)\s*!\s*(?:\r?\n\s*)*/i, "")
+    .trim();
+}
+
+export function containsGenericOpening(value: string) {
+  return /^\s*(?:i hope\b|i (?:just )?wanted to (?:reach out|contact you)|i(?:'m| am) reaching out\b|i came across (?:your|the) (?:website|site)\b|i found (?:your|the) (?:website|site)\b|my name is\b)/i.test(value);
+}
+
+export function outreachDraftNeedsRegeneration(bodyText: string, subject = "") {
+  return hasUnverifiedSalutation(bodyText)
+    || containsPlaceholderText(`${subject}\n${bodyText}`)
+    || containsGenericOpening(normalizeOutreachBody(bodyText))
+    || containsMinimizingRemediation(bodyText);
+}
+
 const HARD_OUTREACH_RULES = [
   "Write the first cold email from exactly one selected, evidence-backed material finding as the concrete hook.",
   "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
@@ -64,6 +97,9 @@ const HARD_OUTREACH_RULES = [
   "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. The CTA should invite a brief consultation about whether rebuilding the site would make sense.",
   "If qualificationDecision is optimization_candidate, frame the selected finding as a material limitation worth improving without implying that the entire site necessarily needs replacement. The CTA should invite a brief consultation about improving the site.",
   "Do not pitch a trivial content-maintenance service. If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
+  "No verified contact-person name is supplied in this drafting packet. Therefore do not write any salutation or greeting. Never write Hi/Hello/Hey/Dear followed by a business name, company name, team, there, owner, or other invented recipient. Start immediately with the specific evidence-backed observation.",
+  "Never emit placeholder text or placeholder identities such as [Name], {First Name}, <Company>, Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD.",
+  "The first sentence must contain a concrete observation tied to the selected finding. Do not open with filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, I found your website, or My name is.",
   "Keep the email concise, specific, and natural. Prefer roughly 80 to 150 words unless the evidence genuinely requires less.",
   "Do not use fake familiarity, generic compliments, placeholders, guilt, or manufactured urgency.",
   "Do not invent a customer persona or situation beyond the supplied business/keyword context.",
@@ -101,9 +137,14 @@ export async function generateOutreachDraft(input: {
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const packet = {
-    businessName: input.businessName,
+    businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     keyword: input.keyword,
+    recipientPolicy: {
+      verifiedPersonNameAvailable: false,
+      salutationAllowed: false,
+      openingRequirement: "Start directly with the specific evidence-backed observation; do not greet the business or a fabricated team.",
+    },
     qualificationContext: {
       decision: input.qualificationDecision ?? null,
       assetStrength: input.assetStrength ?? null,
@@ -139,7 +180,14 @@ export async function generateOutreachDraft(input: {
   const data = await response.json() as any;
   const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
   if (!raw) throw new Error("OpenAI returned no outreach draft");
-  const draft = OutreachDraftSchema.parse(JSON.parse(raw));
+  const parsedDraft = OutreachDraftSchema.parse(JSON.parse(raw));
+  const draft: OutreachDraft = { ...parsedDraft, bodyText: normalizeOutreachBody(parsedDraft.bodyText) };
+  if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.angle}\n${draft.cta}`)) {
+    throw new Error("OpenAI outreach draft contained placeholder text or a fabricated placeholder identity");
+  }
+  if (containsGenericOpening(draft.bodyText)) {
+    throw new Error("OpenAI outreach draft used a generic filler opening instead of the selected evidence-backed observation");
+  }
   if (containsMinimizingRemediation(draft.bodyText)) {
     throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
   }
