@@ -11,6 +11,7 @@ import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js
 import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { withAiCapacity } from "./ai-capacity.js";
+import { getContactIdentityRiskReason } from "./contact-safety.js";
 
 const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate", "optimization_candidate"]);
 
@@ -18,6 +19,7 @@ async function loadOpportunity(prisma: PrismaClient, leadId: number) {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
     include: {
+      contacts: true,
       assetAssessments: {
         orderBy: { createdAt: "desc" },
         take: 1,
@@ -201,6 +203,8 @@ async function recentInitialCtas(prisma: PrismaClient, leadId: number) {
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number, force = false) {
   const settings = await getAppSettings(prisma);
   const { lead, assessment } = await loadOpportunity(prisma, leadId);
+  const contactRisk = getContactIdentityRiskReason(lead);
+  if (contactRisk) throw new Error(contactRisk);
   const existing = await prisma.outreachMessage.findFirst({
     where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } },
     orderBy: { generatedAt: "desc" },
@@ -374,6 +378,19 @@ export async function prepareLeadForOutreach(
         type: "outreach_held_low_priority",
         summary: `Qualified opportunity held below minimum priority (${priority.score} < ${settings.minPriorityScore})`,
         metadata: { score: priority.score, minimum: settings.minPriorityScore },
+      },
+    });
+    return { priority, angle: null, draft: null, held: true };
+  }
+  const { lead } = await loadOpportunity(prisma, leadId);
+  const contactRisk = getContactIdentityRiskReason(lead);
+  if (contactRisk) {
+    await prisma.activity.create({
+      data: {
+        leadId,
+        type: "outreach_held_contact_identity",
+        summary: contactRisk,
+        metadata: { email: lead.email, domain: lead.domain },
       },
     });
     return { priority, angle: null, draft: null, held: true };
