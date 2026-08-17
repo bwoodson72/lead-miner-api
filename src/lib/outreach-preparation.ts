@@ -1,7 +1,12 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getAppSettings } from "./settings.js";
 import { calculateOpportunityPriority } from "./prioritization.js";
-import { selectOutreachAngle, OUTREACH_ANGLE_PROMPT_VERSION } from "./ai-outreach-angle.js";
+import {
+  decodeOutreachPsychology,
+  encodeOutreachPsychology,
+  selectOutreachAngle,
+  OUTREACH_ANGLE_PROMPT_VERSION,
+} from "./ai-outreach-angle.js";
 import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js";
 import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { estimateAiCost } from "./ai-cost.js";
@@ -68,8 +73,7 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
     leadId,
     assessmentId: assessment.id,
     decision: assessment.decision,
-    assetStrength: assessment.assetStrength,
-    researchSummary: assessment.researchSummary,
+    adSource: lead.adSource,
     findings: findings.map((finding) => ({
       id: finding.id,
       category: finding.category,
@@ -83,17 +87,43 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
   };
   const packetHash = hashAiPacket(packet);
   if (!force && lead.primaryOutreachAngle && lead.primaryOutreachFindingId) {
-    const identical = await prisma.aIJob.findFirst({ where: { leadId, type: "outreach_angle", packetHash, status: "complete" }, orderBy: { createdAt: "desc" } });
-    if (identical) return { reused: true, findingId: lead.primaryOutreachFindingId, angle: lead.primaryOutreachAngle, confidence: lead.primaryOutreachAngleConfidence ?? 0, rationale: lead.primaryOutreachAngleReason ?? "Previously selected from identical evidence", packetHash };
+    const identical = await prisma.aIJob.findFirst({
+      where: { leadId, type: "outreach_angle", packetHash, status: "complete" },
+      orderBy: { createdAt: "desc" },
+    });
+    const psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+    if (identical && psychology) {
+      return {
+        reused: true,
+        findingId: lead.primaryOutreachFindingId,
+        observation: lead.primaryOutreachAngle,
+        angle: lead.primaryOutreachAngle,
+        ...psychology,
+        confidence: lead.primaryOutreachAngleConfidence ?? 0,
+        rationale: lead.primaryOutreachAngleReason ?? "Previously selected from identical evidence",
+        packetHash,
+      };
+    }
   }
 
   await assertAiBudgetAvailable(prisma, settings);
-  const job = await prisma.aIJob.create({ data: { leadId, type: "outreach_angle", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_ANGLE_PROMPT_VERSION, packetHash, startedAt: new Date() } });
+  const job = await prisma.aIJob.create({
+    data: {
+      leadId,
+      type: "outreach_angle",
+      status: "running",
+      model: settings.outreachModel,
+      promptVersion: OUTREACH_ANGLE_PROMPT_VERSION,
+      packetHash,
+      startedAt: new Date(),
+    },
+  });
   try {
     const generated = await withAiCapacity(prisma, () => selectOutreachAngle({
       businessName: lead.businessName,
       domain: lead.domain,
       keyword: lead.keyword,
+      adSource: lead.adSource,
       decision: assessment.decision,
       assetStrength: assessment.assetStrength,
       researchSummary: assessment.researchSummary,
@@ -108,12 +138,49 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
         evidenceSources: finding.evidenceSources,
       })),
     }, settings.outreachModel));
+    const encodedPsychology = encodeOutreachPsychology(generated.result);
     await prisma.$transaction(async (tx) => {
-      await tx.lead.update({ where: { id: leadId }, data: { primaryOutreachAngle: generated.result.angle, primaryOutreachAngleReason: generated.result.rationale, primaryOutreachAngleConfidence: generated.result.confidence, primaryOutreachFindingId: generated.result.findingId, outreachPreparedAt: new Date() } });
-      await tx.activity.create({ data: { leadId, type: "outreach_angle_selected", summary: generated.result.angle, metadata: { findingId: generated.result.findingId, confidence: generated.result.confidence, rationale: generated.result.rationale, model: generated.model } } });
-      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, cachedTokens: generated.cachedTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
+      await tx.lead.update({
+        where: { id: leadId },
+        data: {
+          primaryOutreachAngle: generated.result.observation,
+          primaryOutreachAngleReason: encodedPsychology,
+          primaryOutreachAngleConfidence: generated.result.confidence,
+          primaryOutreachFindingId: generated.result.findingId,
+          outreachPreparedAt: new Date(),
+        },
+      });
+      await tx.activity.create({
+        data: {
+          leadId,
+          type: "outreach_angle_selected",
+          summary: generated.result.observation,
+          metadata: {
+            findingId: generated.result.findingId,
+            confidence: generated.result.confidence,
+            ownerStake: generated.result.ownerStake,
+            buyerMoment: generated.result.buyerMoment,
+            psychologicalLever: generated.result.psychologicalLever,
+            rationale: generated.result.rationale,
+            model: generated.model,
+            promptVersion: OUTREACH_ANGLE_PROMPT_VERSION,
+          },
+        },
+      });
+      await tx.aIJob.update({
+        where: { id: job.id },
+        data: {
+          status: "complete",
+          model: generated.model,
+          inputTokens: generated.inputTokens,
+          cachedTokens: generated.cachedTokens,
+          outputTokens: generated.outputTokens,
+          estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens),
+          completedAt: new Date(),
+        },
+      });
     });
-    return { reused: false, ...generated.result, packetHash };
+    return { reused: false, ...generated.result, angle: generated.result.observation, packetHash };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
@@ -121,18 +188,40 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
   }
 }
 
+async function recentInitialCtas(prisma: PrismaClient, leadId: number) {
+  const messages = await prisma.outreachMessage.findMany({
+    where: { leadId: { not: leadId }, kind: "initial", cta: { not: null }, status: { not: "cancelled" } },
+    orderBy: { generatedAt: "desc" },
+    take: 20,
+    select: { cta: true },
+  });
+  return messages.map((message) => message.cta).filter((cta): cta is string => Boolean(cta));
+}
+
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number, force = false) {
   const settings = await getAppSettings(prisma);
   const { lead, assessment } = await loadOpportunity(prisma, leadId);
-  const existing = await prisma.outreachMessage.findFirst({ where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } }, orderBy: { generatedAt: "desc" } });
+  const existing = await prisma.outreachMessage.findFirst({
+    where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } },
+    orderBy: { generatedAt: "desc" },
+  });
   if (existing && !force) {
     if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
     return existing;
   }
   if (!lead.primaryOutreachAngle || !lead.primaryOutreachFindingId) throw new Error("Outreach angle has not been selected");
+  const psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+  if (!psychology) throw new Error("Outreach psychology has not been selected with the current angle rules");
   const selectedFinding = assessment.findings.find((finding) => finding.id === lead.primaryOutreachFindingId);
   if (!selectedFinding) throw new Error("Selected outreach finding is no longer part of the latest assessment");
+  const recentCtas = await recentInitialCtas(prisma, leadId);
 
+  const strategy = {
+    observation: lead.primaryOutreachAngle,
+    ownerStake: psychology.ownerStake,
+    buyerMoment: psychology.buyerMoment,
+    psychologicalLever: psychology.psychologicalLever,
+  };
   const packet = {
     promptVersion: OUTREACH_PROMPT_VERSION,
     model: settings.outreachModel,
@@ -140,21 +229,38 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
     sender: { name: settings.senderName, email: settings.senderEmail },
     leadId,
     assessmentId: assessment.id,
-    decision: assessment.decision,
-    assetStrength: assessment.assetStrength,
-    researchSummary: assessment.researchSummary,
-    decisionReason: assessment.decisionReason,
-    angle: lead.primaryOutreachAngle,
-    finding: { id: selectedFinding.id, category: selectedFinding.category, title: selectedFinding.title, evidence: selectedFinding.evidence, assetCapability: selectedFinding.assetCapability, confidence: selectedFinding.confidence, significance: selectedFinding.significance },
+    qualificationDecision: assessment.decision,
+    strategy,
+    recentCtas,
+    finding: {
+      id: selectedFinding.id,
+      category: selectedFinding.category,
+      title: selectedFinding.title,
+      confidence: selectedFinding.confidence,
+      significance: selectedFinding.significance,
+    },
   };
   const packetHash = hashAiPacket(packet);
   if (!force) {
-    const identical = await prisma.aIJob.findFirst({ where: { leadId, type: "outreach_draft", packetHash, status: "complete" }, orderBy: { createdAt: "desc" } });
+    const identical = await prisma.aIJob.findFirst({
+      where: { leadId, type: "outreach_draft", packetHash, status: "complete" },
+      orderBy: { createdAt: "desc" },
+    });
     if (identical && existing) return existing;
   }
 
   await assertAiBudgetAvailable(prisma, settings);
-  const aiJob = await prisma.aIJob.create({ data: { leadId, type: "outreach_draft", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_PROMPT_VERSION, packetHash, startedAt: new Date() } });
+  const aiJob = await prisma.aIJob.create({
+    data: {
+      leadId,
+      type: "outreach_draft",
+      status: "running",
+      model: settings.outreachModel,
+      promptVersion: OUTREACH_PROMPT_VERSION,
+      packetHash,
+      startedAt: new Date(),
+    },
+  });
   try {
     const generated = await withAiCapacity(prisma, () => generateOutreachDraft({
       businessName: lead.businessName,
@@ -162,17 +268,28 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       keyword: lead.keyword,
       senderName: settings.senderName,
       senderEmail: settings.senderEmail,
-      primaryOutreachAngle: lead.primaryOutreachAngle!,
-      researchSummary: assessment.researchSummary,
-      qualificationReason: assessment.decisionReason,
       qualificationDecision: assessment.decision,
-      assetStrength: assessment.assetStrength,
-      selectedFinding: { id: selectedFinding.id, category: selectedFinding.category, title: selectedFinding.title, evidence: selectedFinding.evidence, assetCapability: selectedFinding.assetCapability, confidence: selectedFinding.confidence, significance: selectedFinding.significance },
+      strategy,
+      recentCtas,
+      selectedFinding: {
+        id: selectedFinding.id,
+        category: selectedFinding.category,
+        title: selectedFinding.title,
+        evidence: selectedFinding.evidence,
+        assetCapability: selectedFinding.assetCapability,
+        confidence: selectedFinding.confidence,
+        significance: selectedFinding.significance,
+      },
     }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions));
-    const shouldAutoApprove = settings.approvalMode === "auto_safe" && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority && generated.draft.confidence >= settings.minAutoApproveConfidence && !generated.draft.requiresReview;
+    const shouldAutoApprove = settings.approvalMode === "auto_safe"
+      && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority
+      && generated.draft.confidence >= settings.minAutoApproveConfidence
+      && !generated.draft.requiresReview;
     const status = shouldAutoApprove ? "approved" : "draft";
     return await prisma.$transaction(async (tx) => {
-      if (force && existing && ["draft", "approved"].includes(existing.status)) await tx.outreachMessage.update({ where: { id: existing.id }, data: { status: "cancelled" } });
+      if (force && existing && ["draft", "approved"].includes(existing.status)) {
+        await tx.outreachMessage.update({ where: { id: existing.id }, data: { status: "cancelled" } });
+      }
       const message = await tx.outreachMessage.create({
         data: {
           leadId,
@@ -191,8 +308,36 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
         },
       });
       await tx.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach", outreachPreparedAt: new Date() } });
-      await tx.activity.create({ data: { leadId, type: shouldAutoApprove ? "message_auto_approved" : "message_generated", summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`, metadata: { confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, findingId: selectedFinding.id, qualificationDecision: assessment.decision, model: generated.model, approvalMode: settings.approvalMode, promptVersion: OUTREACH_PROMPT_VERSION } } });
-      await tx.aIJob.update({ where: { id: aiJob.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, cachedTokens: generated.cachedTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
+      await tx.activity.create({
+        data: {
+          leadId,
+          type: shouldAutoApprove ? "message_auto_approved" : "message_generated",
+          summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`,
+          metadata: {
+            confidence: generated.draft.confidence,
+            requiresReview: generated.draft.requiresReview,
+            findingId: selectedFinding.id,
+            qualificationDecision: assessment.decision,
+            psychologicalLever: psychology.psychologicalLever,
+            model: generated.model,
+            approvalMode: settings.approvalMode,
+            promptVersion: OUTREACH_PROMPT_VERSION,
+            generationAttempts: generated.attempts,
+          },
+        },
+      });
+      await tx.aIJob.update({
+        where: { id: aiJob.id },
+        data: {
+          status: "complete",
+          model: generated.model,
+          inputTokens: generated.inputTokens,
+          cachedTokens: generated.cachedTokens,
+          outputTokens: generated.outputTokens,
+          estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens),
+          completedAt: new Date(),
+        },
+      });
       return message;
     });
   } catch (error) {
@@ -203,11 +348,22 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   }
 }
 
-export async function prepareLeadForOutreach(prisma: PrismaClient, leadId: number, options: { forceAngle?: boolean; forceDraft?: boolean; generateDraft?: boolean } = {}) {
+export async function prepareLeadForOutreach(
+  prisma: PrismaClient,
+  leadId: number,
+  options: { forceAngle?: boolean; forceDraft?: boolean; generateDraft?: boolean } = {},
+) {
   const settings = await getAppSettings(prisma);
   const priority = await prioritizeLead(prisma, leadId);
   if (priority.score < settings.minPriorityScore) {
-    await prisma.activity.create({ data: { leadId, type: "outreach_held_low_priority", summary: `Qualified opportunity held below minimum priority (${priority.score} < ${settings.minPriorityScore})`, metadata: { score: priority.score, minimum: settings.minPriorityScore } } });
+    await prisma.activity.create({
+      data: {
+        leadId,
+        type: "outreach_held_low_priority",
+        summary: `Qualified opportunity held below minimum priority (${priority.score} < ${settings.minPriorityScore})`,
+        metadata: { score: priority.score, minimum: settings.minPriorityScore },
+      },
+    });
     return { priority, angle: null, draft: null, held: true };
   }
   if (!settings.autoSelectOutreachAngle && !options.forceAngle) return { priority, angle: null, draft: null, held: false };
