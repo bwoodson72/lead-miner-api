@@ -1,7 +1,6 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { researchLead, RESEARCH_VERSION, type ResearchResult } from "./ai-research.js";
-import { generateOutreachDraft, OUTREACH_PROMPT_VERSION } from "./ai-outreach.js";
 import { getAppSettings } from "./settings.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { registerEnrichmentRoutes } from "./enrichment-routes.js";
@@ -12,32 +11,13 @@ import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { fetchBusinessAssetResearchPacket } from "./research-site-v10.js";
 import { assessPerformance } from "./performance-assessment.js";
+import { prepareLeadForOutreach } from "./outreach-preparation.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
   if (!settings.autoDraftOutreach) return null;
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] } } });
-  if (!lead || lead.qualificationDecision !== "qualified" || !lead.email) return null;
-  const existing = await prisma.outreachMessage.findFirst({ where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } }, orderBy: { generatedAt: "desc" } });
-  if (existing) { if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } }); return existing; }
-  const aiJob = await prisma.aIJob.create({ data: { leadId, type: "outreach_draft", status: "running", model: settings.outreachModel, promptVersion: OUTREACH_PROMPT_VERSION, startedAt: new Date() } });
-  try {
-    const generated = await withAiCapacity(prisma, () => generateOutreachDraft({ businessName: lead.businessName, domain: lead.domain, keyword: lead.keyword, primaryOutreachAngle: lead.primaryOutreachAngle, researchSummary: lead.researchSummary, qualificationReason: lead.qualificationReason, problems: lead.problems }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions));
-    const shouldAutoApprove = settings.approvalMode === "auto_safe" && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority && generated.draft.confidence >= settings.minAutoApproveConfidence && !generated.draft.requiresReview;
-    const status = shouldAutoApprove ? "approved" : "draft";
-    return prisma.$transaction(async (tx) => {
-      const message = await tx.outreachMessage.create({ data: { leadId, kind: "initial", sequenceNumber: 1, subject: generated.draft.subject, bodyText: generated.draft.bodyText, angle: generated.draft.angle, cta: generated.draft.cta, confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, status, approvedAt: shouldAutoApprove ? new Date() : null } });
-      await tx.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
-      await tx.activity.create({ data: { leadId, type: shouldAutoApprove ? "message_auto_approved" : "message_generated", summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`, metadata: { confidence: generated.draft.confidence, model: generated.model, approvalMode: settings.approvalMode } } });
-      await tx.aIJob.update({ where: { id: aiJob.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, cachedTokens: generated.cachedTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
-      return message;
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await prisma.aIJob.update({ where: { id: aiJob.id }, data: { status: "failed", error: message, completedAt: new Date() } });
-    await prisma.activity.create({ data: { leadId, type: "message_generation_failed", summary: message } });
-    throw error;
-  }
+  const prepared = await prepareLeadForOutreach(prisma, leadId, { generateDraft: true });
+  return prepared.draft;
 }
 
 async function invalidateUnsentInitialOutreach(prisma: PrismaClient, leadId: number) {
