@@ -4,6 +4,8 @@ import { getGmailMessage, sendGmailMessage } from "./gmail.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber, normalizeFollowUpDelays } from "./outreach-sequence.js";
+import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
+import { isCurrentOutreachPromptVersion, staleOutreachReason } from "./outreach-version.js";
 import {
   getSendIneligibilityReason,
   isWithinSendWindow,
@@ -37,16 +39,7 @@ async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
   if (prior?.providerMessageId) {
     try { inReplyToMessageId = (await getGmailMessage(prior.providerMessageId)).rfcMessageId; } catch { inReplyToMessageId = null; }
   }
-  const result = await sendGmailMessage({
-    fromName: settings.senderName,
-    fromEmail: settings.senderEmail,
-    to: message.lead.email,
-    subject: message.subject,
-    bodyText: message.bodyText,
-    messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
-    threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
-    inReplyToMessageId,
-  });
+  const result = await sendGmailMessage({ fromName: settings.senderName, fromEmail: settings.senderEmail, to: message.lead.email, subject: message.subject, bodyText: message.bodyText, messageId: makeGmailRfcMessageId(message.id, settings.senderEmail), threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null, inReplyToMessageId });
   return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
 }
 
@@ -63,6 +56,8 @@ async function globalSuppressionReason(prisma: PrismaClient, lead: any) {
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true } } } });
   if (!message) throw new Error("Message not found");
+  if (!isCurrentOutreachPromptVersion(message.kind, message.promptVersion)) throw new Error(staleOutreachReason(message.kind, message.promptVersion) ?? "Outreach draft is stale");
+  if (outreachDraftNeedsRegeneration(message.bodyText, message.subject)) throw new Error("Outreach draft failed current recipient/opening quality checks and must be regenerated or manually edited before sending");
   if (message.sequenceNumber > TOTAL_OUTREACH_TOUCHES) throw new Error(`Outreach sequence is capped at ${TOTAL_OUTREACH_TOUCHES} total touches`);
   if (message.scheduledAt && message.scheduledAt > new Date()) throw new Error(`Message is scheduled for ${message.scheduledAt.toISOString()}`);
   const paused = await prisma.suppression.findUnique({ where: { type_value: { type: "global", value: "outreach" } } });
@@ -71,15 +66,11 @@ async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   if (globalReason) throw new Error(globalReason);
   const reason = getSendIneligibilityReason(message.lead);
   if (reason) throw new Error(reason);
-  if (message.lead.lastOutreachDate && message.sequenceNumber > 1 && Date.now() - message.lead.lastOutreachDate.getTime() < MIN_MESSAGE_INTERVAL_MS) {
-    throw new Error("Minimum interval between messages to this lead has not elapsed");
-  }
+  if (message.lead.lastOutreachDate && message.sequenceNumber > 1 && Date.now() - message.lead.lastOutreachDate.getTime() < MIN_MESSAGE_INTERVAL_MS) throw new Error("Minimum interval between messages to this lead has not elapsed");
   return message;
 }
 
-export type ClaimApprovedResult =
-  | { state: "claimed"; idempotencyKey: string }
-  | { state: "already_sent"; message: any };
+export type ClaimApprovedResult = { state: "claimed"; idempotencyKey: string } | { state: "already_sent"; message: any };
 
 export async function claimApprovedMessage(prisma: PrismaClient, messageId: number, attemptedAt = new Date()): Promise<ClaimApprovedResult> {
   const key = makeOutreachIdempotencyKey(messageId);
@@ -94,27 +85,15 @@ async function completeSend(prisma: PrismaClient, message: any, provider: { prov
   const [sequence, settings] = await Promise.all([getActiveOutreachSequence(prisma), getAppSettings(prisma)]);
   const sentAt = new Date();
   const breakup = message.kind === "followup" && isBreakupSequenceNumber(message.sequenceNumber);
-  const followUpDate = breakup ? null : nextFollowUpDate(sequence.delaysDays, message.sequenceNumber, {
-    from: sentAt,
-    sendWindowStart: settings.sendWindowStart,
-    sendWindowEnd: settings.sendWindowEnd,
-    sendTimezone: settings.sendTimezone,
-    weekendSendingEnabled: settings.weekendSendingEnabled,
-  });
+  const followUpDate = breakup ? null : nextFollowUpDate(sequence.delaysDays, message.sequenceNumber, { from: sentAt, sendWindowStart: settings.sendWindowStart, sendWindowEnd: settings.sendWindowEnd, sendTimezone: settings.sendTimezone, weekendSendingEnabled: settings.weekendSendingEnabled });
   const nextStatus = followUpDate ? "contacted" : "closed_no_response";
 
   return prisma.$transaction(async (tx) => {
     const updated = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
     await tx.lead.update({ where: { id: message.leadId }, data: { status: nextStatus, outreachCount: { increment: 1 }, firstContactAt: message.lead.firstContactAt ?? sentAt, lastOutreachDate: sentAt, followUpDate } });
-    if (provider.providerThreadId) {
-      await tx.emailThread.upsert({
-        where: { providerThreadId: provider.providerThreadId },
-        update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt },
-        create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt },
-      });
-    }
+    if (provider.providerThreadId) await tx.emailThread.upsert({ where: { providerThreadId: provider.providerThreadId }, update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt }, create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt } });
     const followUpNumber = message.kind === "followup" ? message.sequenceNumber - 1 : null;
-    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey, followUpNumber, breakup } } });
+    await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey, followUpNumber, breakup, promptVersion: message.promptVersion } } });
     if (followUpDate) await tx.activity.create({ data: { leadId: message.leadId, type: "followup_scheduled", summary: `Next follow-up scheduled for ${followUpDate.toISOString()}`, metadata: { followUpDate: followUpDate.toISOString(), sequenceNumber: message.sequenceNumber + 1 } } });
     return updated;
   });
@@ -140,9 +119,7 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
   if (!lease) throw new Error("Another send operation is already in progress");
   try {
     const settings = await getAppSettings(prisma);
-    if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd, new Date(), settings.sendTimezone, settings.weekendSendingEnabled)) {
-      throw new Error(`Outside configured send window (${settings.sendWindowStart}-${settings.sendWindowEnd} ${settings.sendTimezone})`);
-    }
+    if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd, new Date(), settings.sendTimezone, settings.weekendSendingEnabled)) throw new Error(`Outside configured send window (${settings.sendWindowStart}-${settings.sendWindowEnd} ${settings.sendTimezone})`);
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const sentOrClaimedToday = await prisma.outreachMessage.count({ where: { OR: [{ status: "sent", sentAt: { gte: startOfDay } }, { status: "sending", sendAttemptedAt: { gte: startOfDay } }] } });
     if (sentOrClaimedToday >= settings.dailySendLimit) throw new Error(`Daily send limit reached (${settings.dailySendLimit})`);
@@ -171,12 +148,7 @@ export async function reconcileStaleSends(prisma: PrismaClient, limit = 10, retr
 export async function sendApprovedQueue(prisma: PrismaClient, limit = 25) {
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
   const now = new Date();
-  const messages = await prisma.outreachMessage.findMany({
-    where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES }, OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] },
-    orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }],
-    take: safeLimit,
-    select: { id: true },
-  });
+  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES }, OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
   for (const message of messages) {
     try { await sendApprovedMessage(prisma, message.id); results.push({ messageId: message.id, success: true }); }
