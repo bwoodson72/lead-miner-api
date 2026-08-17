@@ -1,5 +1,5 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { ensureInitialOutreachDraft } from "./outreach-preparation.js";
+import { ensureInitialOutreachDraft, prioritizeLead, selectLeadOutreachAngle } from "./outreach-preparation.js";
 import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
 import { isCurrentOutreachPromptVersion, requiredOutreachPromptVersion } from "./outreach-version.js";
 
@@ -7,7 +7,7 @@ export type RegenerateUnsentScope = "all" | "initial" | "followup";
 
 export async function regenerateUnsentOutreach(
   prisma: PrismaClient,
-  options: { scope?: RegenerateUnsentScope; messageIds?: number[]; limit?: number } = {},
+  options: { scope?: RegenerateUnsentScope; messageIds?: number[]; limit?: number; force?: boolean } = {},
 ) {
   const scope = options.scope ?? "all";
   const limit = Math.min(Math.max(Math.floor(options.limit ?? 100), 1), 500);
@@ -29,7 +29,8 @@ export async function regenerateUnsentOutreach(
   }
 
   const candidates = [...latestBySlot.values()].filter((message) =>
-    !isCurrentOutreachPromptVersion(message.kind, message.promptVersion)
+    options.force
+    || !isCurrentOutreachPromptVersion(message.kind, message.promptVersion)
     || outreachDraftNeedsRegeneration(message.bodyText, message.subject),
   );
 
@@ -67,6 +68,10 @@ export async function regenerateUnsentOutreach(
           continue;
         }
 
+        // Old drafts can reference a finding from an older assessment. Recalculate priority and
+        // deliberately reselect the angle against the latest assessment before generating copy.
+        await prioritizeLead(prisma, message.leadId);
+        await selectLeadOutreachAngle(prisma, message.leadId, true);
         const replacement = await ensureInitialOutreachDraft(prisma, message.leadId, true);
         if (!replacement) throw new Error("Initial outreach regeneration returned no replacement draft");
         await prisma.$transaction(async (tx) => {
@@ -86,8 +91,13 @@ export async function regenerateUnsentOutreach(
         results.push({ messageId: message.id, leadId: message.leadId, kind: message.kind, success: true, replacementMessageId: replacement.id, action: "regenerated" });
       } else {
         await prisma.$transaction(async (tx) => {
-          await tx.outreachMessage.update({
-            where: { id: message.id },
+          await tx.outreachMessage.updateMany({
+            where: {
+              leadId: message.leadId,
+              kind: "followup",
+              sequenceNumber: message.sequenceNumber,
+              status: { in: ["draft", "approved"] },
+            },
             data: { status: "cancelled", requiresReview: true, sendError: `Stale follow-up cancelled; regenerate when due with ${requiredOutreachPromptVersion("followup")}` },
           });
           await tx.activity.create({
