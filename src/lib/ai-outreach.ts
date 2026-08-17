@@ -13,7 +13,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v8";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v9";
 
 function schema() {
   return {
@@ -53,6 +53,22 @@ export function containsMinimizingRemediation(value: string) {
   return /\b(?:simple|quick|easy|small)\s+(?:cleanup|fix|change|update|adjustment)|\b(?:just|simply)\s+(?:change|update|replace|add|remove)|\bone primary phone\b|\bone monitored email\b/i.test(value);
 }
 
+export function containsConsultantJargon(value: string) {
+  return /\b(?:acquisition asset|material limitation|optimization engagement|conversion paths?|customer-acquisition asset)\b/i.test(value);
+}
+
+export function ctaNeedsRegeneration(value: string) {
+  const cta = value.trim();
+  if (!cta) return true;
+  if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
+  if (!/\?\s*$/.test(cta)) return true;
+  if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
+  if (/^would you be open to (?:a )?brief consultation about improving\b/i.test(cta)) return true;
+  if (/^would you be open to (?:a )?(?:brief )?(?:conversation|consultation) about (?:improving|the site|the website)\b/i.test(cta)) return true;
+  if (/^would you be open to (?:improving|a look at improving) (?:the|your|this|that) (?:site|website|homepage|page)(?:'s)?\b/i.test(cta)) return true;
+  return false;
+}
+
 export function isPlaceholderBusinessName(value: string | null | undefined) {
   if (!value) return false;
   const normalized = value.trim().replace(/\s+/g, " ");
@@ -79,31 +95,40 @@ export function containsGenericOpening(value: string) {
   return /^\s*(?:i hope\b|i (?:just )?wanted to (?:reach out|contact you)|i(?:'m| am) reaching out\b|i came across (?:your|the) (?:website|site)\b|i found (?:your|the) (?:website|site)\b|my name is\b)/i.test(value);
 }
 
-export function outreachDraftNeedsRegeneration(bodyText: string, subject = "") {
+export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", cta = "") {
   return hasUnverifiedSalutation(bodyText)
     || containsPlaceholderText(`${subject}\n${bodyText}`)
     || containsGenericOpening(normalizeOutreachBody(bodyText))
-    || containsMinimizingRemediation(bodyText);
+    || containsMinimizingRemediation(bodyText)
+    || containsConsultantJargon(bodyText)
+    || (cta ? ctaNeedsRegeneration(cta) : false);
 }
 
 const HARD_OUTREACH_RULES = [
+  "Write Touch 1 as concise evidence-backed direct-response outreach: one concrete observation, one plausible business consequence, why that consequence matters to the owner, and one low-friction question.",
   "Write the first cold email from exactly one selected, evidence-backed material finding as the concrete hook.",
   "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
-  "Never invent metrics, traffic loss, revenue loss, ad spend, customer behavior, rankings, business plans, growth, or facts not supplied.",
+  "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied.",
+  "Never state imagined visitor behavior as observed fact. Conditional consequences are allowed when they follow directly from the selected finding and the observed business or customer-action context.",
+  "Plausible hypothetical buying situations are explicitly allowed when grounded in the supplied business type, selected finding, and observed page role or CTA. For example, a homeowner comparing roofers may go back to the search results rather than wait, or a paid-ad visitor may leave before reaching an inspection form. Frame these as possibilities using language such as someone, may, could, or if; never claim they definitely happened.",
+  "Use self-interest and loss aversion where supported. Translate the finding into owner-level stakes such as making the business harder to choose, weakening customer confidence, adding friction before an inquiry, making a competitor easier to choose, or getting less value from traffic already reaching the site.",
+  "When useful, create one short mental picture of the buying situation so the owner can see why the issue matters. Do not invent demographic details, motivations, or circumstances beyond the supplied business context.",
+  "Create curiosity instead of explaining the entire remedy. Surface the larger business question and leave enough unresolved that a reply or consultation feels useful.",
   "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, benchmark names, crawler failures, evidence sources, or internal Lead Miner terminology.",
   "Translate technical evidence into ordinary business language without overstating the consequence. Use conditional business-impact language when actual visitor behavior is not observed.",
-  "Do not prescribe the implementation fix in the cold email. Do not give the prospect a checklist, step-by-step remedy, or DIY instructions. The purpose is to surface the business problem and open a consultation, not solve it in the email.",
+  "Do not use prospect-facing consultant jargon such as acquisition asset, customer-acquisition asset, material limitation, optimization engagement, or conversion path. Say what the owner or customer actually experiences instead.",
+  "Do not prescribe the implementation fix in the cold email. Do not give the prospect a checklist, step-by-step remedy, or DIY instructions. The purpose is to surface the business problem and open a conversation, not solve it in the email.",
   "Never minimize the opportunity with language such as simple cleanup, quick fix, easy change, small update, just change, simply replace, one primary phone, or one monitored email.",
-  "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. The CTA should invite a brief consultation about whether rebuilding the site would make sense.",
-  "If qualificationDecision is optimization_candidate, frame the selected finding as a material limitation worth improving without implying that the entire site necessarily needs replacement. The CTA should invite a brief consultation about improving the site.",
+  "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. Frame the unresolved question around whether continuing to patch the current website makes sense versus replacing it with a stronger business asset.",
+  "If qualificationDecision is optimization_candidate, focus on the meaningful limitation and the business consequence of leaving it unresolved. Treat the existing website as fundamentally viable and do not exaggerate the issue into a rebuild case.",
   "Do not pitch a trivial content-maintenance service. If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
   "No verified contact-person name is supplied in this drafting packet. Therefore do not write any salutation or greeting. Never write Hi/Hello/Hey/Dear followed by a business name, company name, team, there, owner, or other invented recipient. Start immediately with the specific evidence-backed observation.",
   "Never emit placeholder text or placeholder identities such as [Name], {First Name}, <Company>, Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD.",
   "The first sentence must contain a concrete observation tied to the selected finding. Do not open with filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, I found your website, or My name is.",
   "Keep the email concise, specific, and natural. Prefer roughly 80 to 150 words unless the evidence genuinely requires less.",
-  "Do not use fake familiarity, generic compliments, placeholders, guilt, or manufactured urgency.",
-  "Do not invent a customer persona or situation beyond the supplied business/keyword context.",
-  "Use one CTA. Prefer a brief consultation-oriented question over vague language such as tightening this up or having a conversation about the issue.",
+  "Do not use fake familiarity, generic compliments, placeholders, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
+  "Use one CTA, and make the cta field the exact prospect-facing question used in the email. It must be a complete question, not an instruction to the writer and not a fragment.",
+  "The CTA should continue the unresolved business question rather than defaulting to generic website-service language. Good CTAs ask whether it is worth looking at what prospects see, whether the issue may be getting in the way of inquiries, or whether the owner wants to understand the risk. A consultation can be implied or explicitly offered, but do not default to formulas such as 'brief consultation about improving the site.'",
   "Return only the required structured draft.",
 ].join(" ");
 
@@ -190,6 +215,12 @@ export async function generateOutreachDraft(input: {
   }
   if (containsMinimizingRemediation(draft.bodyText)) {
     throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
+  }
+  if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) {
+    throw new Error("OpenAI outreach draft used internal consultant jargon instead of owner-facing business language");
+  }
+  if (ctaNeedsRegeneration(draft.cta)) {
+    throw new Error("OpenAI outreach draft produced a malformed, meta, or generic consultation CTA");
   }
   return {
     draft,
