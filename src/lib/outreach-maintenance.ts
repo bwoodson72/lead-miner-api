@@ -2,21 +2,47 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { ensureInitialOutreachDraft, prioritizeLead, selectLeadOutreachAngle } from "./outreach-preparation.js";
 import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
 import { isCurrentOutreachPromptVersion, requiredOutreachPromptVersion } from "./outreach-version.js";
+import { processLeadResearch } from "./research-routes.js";
 
 export type RegenerateUnsentScope = "all" | "initial" | "followup";
 
-async function regenerateInitialWithCurrentEvidence(prisma: PrismaClient, leadId: number) {
+const OUTREACH_ELIGIBLE_DECISIONS = new Set(["rebuild_candidate", "optimization_candidate"]);
+
+type InitialRegenerationOutcome = {
+  replacement: Awaited<ReturnType<typeof ensureInitialOutreachDraft>> | null;
+  action: "regenerated" | "regenerated_after_research" | "cancelled_after_research_not_eligible";
+  researchDecision?: string;
+};
+
+async function regenerateInitialWithCurrentEvidence(prisma: PrismaClient, leadId: number): Promise<InitialRegenerationOutcome> {
   try {
-    return await ensureInitialOutreachDraft(prisma, leadId, true);
+    return { replacement: await ensureInitialOutreachDraft(prisma, leadId, true), action: "regenerated" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+
+    if (message === "Lead has no business-asset assessment") {
+      const researched = await processLeadResearch(prisma, leadId);
+      const researchDecision = researched.result.decision;
+      if (!OUTREACH_ELIGIBLE_DECISIONS.has(researchDecision)) {
+        return { replacement: null, action: "cancelled_after_research_not_eligible", researchDecision };
+      }
+
+      await prioritizeLead(prisma, leadId);
+      await selectLeadOutreachAngle(prisma, leadId, true);
+      return {
+        replacement: await ensureInitialOutreachDraft(prisma, leadId, true),
+        action: "regenerated_after_research",
+        researchDecision,
+      };
+    }
+
     const staleAngle = message === "Outreach angle has not been selected"
       || message === "Selected outreach finding is no longer part of the latest assessment";
     if (!staleAngle) throw error;
 
     await prioritizeLead(prisma, leadId);
     await selectLeadOutreachAngle(prisma, leadId, true);
-    return ensureInitialOutreachDraft(prisma, leadId, true);
+    return { replacement: await ensureInitialOutreachDraft(prisma, leadId, true), action: "regenerated" };
   }
 }
 
@@ -83,8 +109,19 @@ export async function regenerateUnsentOutreach(
           continue;
         }
 
-        const replacement = await regenerateInitialWithCurrentEvidence(prisma, message.leadId);
-        if (!replacement) throw new Error("Initial outreach regeneration returned no replacement draft");
+        const regeneration = await regenerateInitialWithCurrentEvidence(prisma, message.leadId);
+        if (!regeneration.replacement) {
+          results.push({
+            messageId: message.id,
+            leadId: message.leadId,
+            kind: message.kind,
+            success: true,
+            action: `${regeneration.action}:${regeneration.researchDecision ?? "unknown"}`,
+          });
+          continue;
+        }
+
+        const replacement = regeneration.replacement;
         await prisma.$transaction(async (tx) => {
           await tx.outreachMessage.updateMany({
             where: { leadId: message.leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved"] }, id: { not: replacement.id } },
@@ -95,11 +132,17 @@ export async function regenerateUnsentOutreach(
               leadId: message.leadId,
               type: "legacy_outreach_regenerated",
               summary: `Regenerated unsent initial outreach with ${requiredOutreachPromptVersion("initial")}`,
-              metadata: { previousMessageId: message.id, replacementMessageId: replacement.id, previousPromptVersion: message.promptVersion },
+              metadata: {
+                previousMessageId: message.id,
+                replacementMessageId: replacement.id,
+                previousPromptVersion: message.promptVersion,
+                regenerationAction: regeneration.action,
+                researchDecision: regeneration.researchDecision ?? null,
+              },
             },
           });
         });
-        results.push({ messageId: message.id, leadId: message.leadId, kind: message.kind, success: true, replacementMessageId: replacement.id, action: "regenerated" });
+        results.push({ messageId: message.id, leadId: message.leadId, kind: message.kind, success: true, replacementMessageId: replacement.id, action: regeneration.action });
       } else {
         await prisma.$transaction(async (tx) => {
           await tx.outreachMessage.updateMany({
