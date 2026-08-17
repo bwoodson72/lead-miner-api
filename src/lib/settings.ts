@@ -8,6 +8,21 @@ import {
   normalizeFollowUpDelays,
 } from "./outreach-sequence.js";
 
+export const LEGACY_OUTREACH_INSTRUCTIONS = "Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.";
+
+export const DEFAULT_OUTREACH_INSTRUCTIONS = [
+  "Write Touch 1 as a short email Brian Woodson would personally type to a business owner after noticing something on their website.",
+  "The goal is to get a reply or permission to send the details. Do not try to sell the project, book a consultation, or ask for a meeting in Touch 1.",
+  "Use the supplied verified observation and private psychological strategy. Make one point.",
+  "Show why the observation may matter to the owner in a way they can easily picture. Use the supplied owner stake and buyer moment only when they fit naturally. State possible customer behavior as a possibility, never as something known to have happened.",
+  "Let persuasion come from self-interest, loss aversion, competitive choice, trust, protecting money already being spent, or making the next step easier. Do not name or explain the persuasion technique in the email.",
+  "Write in ordinary spoken English. It should sound like Brian noticed something, thought the owner should know, and sent a quick email.",
+  "Briefly establish why Brian notices this kind of thing: he builds custom websites for service businesses. Do not turn this into a bio or credentials paragraph.",
+  "Do not explain the whole diagnosis or the fix. Leave enough unanswered that replying is worthwhile.",
+  "Start with Hi, and end with one small, low-pressure question that makes replying easy. Sign Brian.",
+  "Keep it roughly 55 to 100 words. Never invent facts, losses, metrics, urgency, recipient identity, or customer behavior. Never mention audit or performance-testing terminology.",
+].join(" ");
+
 export const ApprovalModeSchema = z.enum(["manual", "shadow", "auto_safe"]);
 const PriorityWeightsSchema = z.object({
   opportunityType: z.number().min(0).max(100),
@@ -73,17 +88,23 @@ async function syncDefaultSequence(prisma: PrismaClient, inputDelays: unknown) {
 }
 
 export async function getAppSettings(prisma: PrismaClient) {
-  let settings = await prisma.appSettings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
+  let settings = await prisma.appSettings.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, outreachInstructions: DEFAULT_OUTREACH_INSTRUCTIONS },
+  });
   const delays = normalizeFollowUpDelays(settings.followUpDelaysDays);
   const delaysChanged = JSON.stringify(settings.followUpDelaysDays) !== JSON.stringify(delays);
-  const instructionsChanged = settings.followUpInstructions === LEGACY_FOLLOW_UP_INSTRUCTIONS;
+  const followUpInstructionsChanged = settings.followUpInstructions === LEGACY_FOLLOW_UP_INSTRUCTIONS;
+  const outreachInstructionsChanged = settings.outreachInstructions === LEGACY_OUTREACH_INSTRUCTIONS;
 
-  if (delaysChanged || instructionsChanged) {
+  if (delaysChanged || followUpInstructionsChanged || outreachInstructionsChanged) {
     settings = await prisma.appSettings.update({
       where: { id: 1 },
       data: {
         ...(delaysChanged ? { followUpDelaysDays: delays } : {}),
-        ...(instructionsChanged ? { followUpInstructions: DEFAULT_FOLLOW_UP_INSTRUCTIONS } : {}),
+        ...(followUpInstructionsChanged ? { followUpInstructions: DEFAULT_FOLLOW_UP_INSTRUCTIONS } : {}),
+        ...(outreachInstructionsChanged ? { outreachInstructions: DEFAULT_OUTREACH_INSTRUCTIONS } : {}),
       },
     });
   }
@@ -109,7 +130,7 @@ export async function patchAppSettings(prisma: PrismaClient, input: unknown) {
   const settings = await prisma.appSettings.upsert({
     where: { id: 1 },
     update: parsed,
-    create: { id: 1, ...parsed },
+    create: { id: 1, outreachInstructions: DEFAULT_OUTREACH_INSTRUCTIONS, ...parsed },
   });
   if (parsed.followUpDelaysDays) await syncDefaultSequence(prisma, parsed.followUpDelaysDays);
   return settings;
