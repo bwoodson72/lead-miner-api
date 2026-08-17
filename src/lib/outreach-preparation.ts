@@ -209,15 +209,27 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
     if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
     return existing;
   }
-  if (!lead.primaryOutreachAngle || !lead.primaryOutreachFindingId) throw new Error("Outreach angle has not been selected");
-  const psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
-  if (!psychology) throw new Error("Outreach psychology has not been selected with the current angle rules");
-  const selectedFinding = assessment.findings.find((finding) => finding.id === lead.primaryOutreachFindingId);
+
+  let observation = lead.primaryOutreachAngle;
+  let findingId = lead.primaryOutreachFindingId;
+  let psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+  if (!observation || !findingId || !psychology) {
+    const refreshed = await selectLeadOutreachAngle(prisma, leadId, true);
+    observation = refreshed.observation;
+    findingId = refreshed.findingId;
+    psychology = {
+      ownerStake: refreshed.ownerStake,
+      buyerMoment: refreshed.buyerMoment,
+      psychologicalLever: refreshed.psychologicalLever,
+    };
+  }
+
+  const selectedFinding = assessment.findings.find((finding) => finding.id === findingId);
   if (!selectedFinding) throw new Error("Selected outreach finding is no longer part of the latest assessment");
   const recentCtas = await recentInitialCtas(prisma, leadId);
 
   const strategy = {
-    observation: lead.primaryOutreachAngle,
+    observation,
     ownerStake: psychology.ownerStake,
     buyerMoment: psychology.buyerMoment,
     psychologicalLever: psychology.psychologicalLever,
