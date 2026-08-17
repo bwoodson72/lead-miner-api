@@ -1,3 +1,5 @@
+import { getContactIdentityRiskReason, type ContactSafetyEvidence } from "./contact-safety.js";
+
 export type SendEligibilityLead = {
   email: string | null;
   domain: string;
@@ -5,6 +7,7 @@ export type SendEligibilityLead = {
   replyStatus: string | null;
   lastReplyAt: Date | null;
   suppressions: Array<{ value: string }>;
+  contacts?: ContactSafetyEvidence[];
 };
 
 const BLOCKED_SEND_STATUSES = new Set([
@@ -24,6 +27,8 @@ const BLOCKED_SEND_STATUSES = new Set([
 
 export function getSendIneligibilityReason(lead: SendEligibilityLead): string | null {
   if (!lead.email) return "Lead has no email address";
+  const contactRisk = getContactIdentityRiskReason(lead);
+  if (contactRisk) return contactRisk;
   if (lead.replyStatus || lead.lastReplyAt) return "Lead has already replied";
   if (BLOCKED_SEND_STATUSES.has(lead.status)) return `Lead status ${lead.status} is not send-eligible`;
   const email = lead.email.toLowerCase();
