@@ -17,7 +17,7 @@ export const SAFETY_LIMITS = {
   bulkEnrichmentMax: envInt("BULK_ENRICHMENT_MAX", 50, 1, 100),
   automationReplySyncMax: envInt("AUTOMATION_REPLY_SYNC_MAX", 50, 1, 100),
   automationEnrichmentMax: envInt("AUTOMATION_ENRICHMENT_MAX", 10, 1, 25),
-  automationResearchMax: envInt("AUTOMATION_RESEARCH_MAX", 10, 1, 25),
+  automationResearchMax: envInt("AUTOMATION_RESEARCH_MAX", 100, 1, 100),
   automationStaleSendMax: envInt("AUTOMATION_STALE_SEND_MAX", 10, 1, 25),
   automationFollowupMax: envInt("AUTOMATION_FOLLOWUP_MAX", 20, 1, 50),
   automationSendMax: envInt("AUTOMATION_SEND_MAX", 20, 1, 50),
