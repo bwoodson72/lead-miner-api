@@ -31,6 +31,7 @@ export type EvidenceSafetyProblem = {
 
 const UNVERIFIED_DOM_SOURCES = new Set<ResearchEvidenceSource>(["dom_heading", "dom_text"]);
 const TEMPLATE_CONTAMINATION = /template|placeholder|demo content|sample content|unrelated|wrong (?:business|company|industry)|kitchen|kitchor|lorem ipsum|leftover/i;
+const UNVERIFIED_VISITOR_VISIBILITY = /\bvisibility unverified\b|\bvisitor-facing\b[\s\S]{0,80}\b(?:verify|verified|verification)\b|\brendered[- ]browser\b[\s\S]{0,80}\b(?:verify|verified|verification|required|needed)\b|\bstatic html\b[\s\S]{0,120}\b(?:verify|verified|verification)\b/i;
 
 // The current research crawler can discover links to contact/request pages but does
 // not render and verify every linked page. A missing-form claim is therefore a
@@ -56,6 +57,10 @@ export function containsTemplateContamination(value: string | null | undefined) 
   return Boolean(value && TEMPLATE_CONTAMINATION.test(value));
 }
 
+export function containsUnverifiedVisitorVisibility(value: string | null | undefined) {
+  return Boolean(value && UNVERIFIED_VISITOR_VISIBILITY.test(value));
+}
+
 export function containsUnsupportedFormAbsenceClaim(value: string | null | undefined) {
   return Boolean(value && UNSUPPORTED_FORM_ABSENCE.test(value));
 }
@@ -73,11 +78,23 @@ export function isUnsupportedFormAbsenceProblem(problem: EvidenceSafetyProblem) 
   return containsUnsupportedFormAbsenceClaim(`${problem.category} ${problem.title} ${problem.evidence} ${problem.recommendedImprovement}`);
 }
 
+function hasExplicitVisibilityUncertainty(problem: EvidenceSafetyProblem) {
+  return containsUnverifiedVisitorVisibility(`${problem.category} ${problem.title} ${problem.evidence} ${problem.businessConsequence} ${problem.recommendedImprovement}`);
+}
+
 export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(problem: T): T {
   if (isUnsupportedFormAbsenceProblem(problem)) {
     return annotateEvidence({
       ...problem,
       confidence: Math.min(problem.confidence, 0.2),
+      outreachValue: lowerOutreachValue(problem.outreachValue, "low"),
+    });
+  }
+
+  if (hasExplicitVisibilityUncertainty(problem)) {
+    return annotateEvidence({
+      ...problem,
+      confidence: Math.min(problem.confidence, 0.4),
       outreachValue: lowerOutreachValue(problem.outreachValue, "low"),
     });
   }
@@ -102,7 +119,9 @@ export function applyResearchEvidenceSafety<T extends EvidenceSafetyProblem>(pro
 }
 
 export function isSafePrimaryOutreachProblem(problem: EvidenceSafetyProblem) {
-  return problem.outreachValue !== "low" && problem.confidence >= 0.6;
+  return problem.outreachValue !== "low"
+    && problem.confidence >= 0.6
+    && !hasExplicitVisibilityUncertainty(problem);
 }
 
 export function sanitizePrimaryOutreachAngle(angle: string | null, problems: EvidenceSafetyProblem[]) {
