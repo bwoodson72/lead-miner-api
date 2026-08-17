@@ -5,6 +5,21 @@ import { isCurrentOutreachPromptVersion, requiredOutreachPromptVersion } from ".
 
 export type RegenerateUnsentScope = "all" | "initial" | "followup";
 
+async function regenerateInitialWithCurrentEvidence(prisma: PrismaClient, leadId: number) {
+  try {
+    return await ensureInitialOutreachDraft(prisma, leadId, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const staleAngle = message === "Outreach angle has not been selected"
+      || message === "Selected outreach finding is no longer part of the latest assessment";
+    if (!staleAngle) throw error;
+
+    await prioritizeLead(prisma, leadId);
+    await selectLeadOutreachAngle(prisma, leadId, true);
+    return ensureInitialOutreachDraft(prisma, leadId, true);
+  }
+}
+
 export async function regenerateUnsentOutreach(
   prisma: PrismaClient,
   options: { scope?: RegenerateUnsentScope; messageIds?: number[]; limit?: number; force?: boolean } = {},
@@ -68,11 +83,7 @@ export async function regenerateUnsentOutreach(
           continue;
         }
 
-        // Old drafts can reference a finding from an older assessment. Recalculate priority and
-        // deliberately reselect the angle against the latest assessment before generating copy.
-        await prioritizeLead(prisma, message.leadId);
-        await selectLeadOutreachAngle(prisma, message.leadId, true);
-        const replacement = await ensureInitialOutreachDraft(prisma, message.leadId, true);
+        const replacement = await regenerateInitialWithCurrentEvidence(prisma, message.leadId);
         if (!replacement) throw new Error("Initial outreach regeneration returned no replacement draft");
         await prisma.$transaction(async (tx) => {
           await tx.outreachMessage.updateMany({
