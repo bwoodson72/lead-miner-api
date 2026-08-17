@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  containsArtificialOutreachLanguage,
   containsConsultantJargon,
   containsGenericOpening,
   containsMinimizingRemediation,
@@ -16,8 +17,8 @@ import {
   outreachDraftNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v12", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v12");
+test("outreach prompt version is v13", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v13");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
@@ -83,8 +84,8 @@ test("representative simple-cleanup outreach is rejected by deterministic draft 
   assert.equal(containsMinimizingRemediation("A simple cleanup—one primary phone, one monitored email, and consistent contact details across the site—could make it easier for prospects to reach you."), true);
 });
 
-test("problem-and-consultation framing is not rejected as trivial remediation", () => {
-  assert.equal(containsMinimizingRemediation("I noticed the site gives visitors conflicting contact information, which can create uncertainty at the point they are deciding whether to reach out. Is that something you want me to show you?"), false);
+test("problem-and-reply framing is not rejected as trivial remediation", () => {
+  assert.equal(containsMinimizingRemediation("I noticed the site gives people conflicting contact information, which can make someone hesitate before calling. Want me to send over what I found?"), false);
 });
 
 test("neutral greeting is allowed and preserved", () => {
@@ -110,7 +111,7 @@ test("placeholder identities and template tokens are rejected", () => {
 test("generic cold-email filler openings are rejected", () => {
   assert.equal(containsGenericOpening("I wanted to reach out about your website."), true);
   assert.equal(containsGenericOpening("I came across your website and wanted to connect."), true);
-  assert.equal(containsGenericOpening("The quote path sends visitors through two conflicting contact options."), false);
+  assert.equal(containsGenericOpening("The quote form takes a while to appear."), false);
 });
 
 test("existing drafts with fabricated team greetings require regeneration", () => {
@@ -122,8 +123,8 @@ test("existing drafts without a neutral greeting require regeneration", () => {
 });
 
 test("specific observation with neutral greeting and natural CTA remains acceptable", () => {
-  const body = "Hi,\n\nThe mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.\n\nI build custom websites for service businesses, so this kind of issue stands out to me.\n\nWant me to send over what I found?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the site", "Want me to send over what I found?"), false);
+  const body = "Hi,\n\nI noticed the estimate form takes a while to show up. Someone comparing roofers may not wait around for it.\n\nI build custom websites for service businesses, so this stood out to me.\n\nWant me to send over what I found?\n\nBrian";
+  assert.equal(outreachDraftNeedsRegeneration(body, "A question about the estimate form", "Want me to send over what I found?"), false);
 });
 
 test("sender identity is recognized from natural configured context", () => {
@@ -137,19 +138,29 @@ test("prospect-facing consultant jargon is rejected", () => {
   assert.equal(containsConsultantJargon("Someone comparing roofers may leave before reaching the estimate form."), false);
 });
 
-test("meta, fragment, generic, and recurring CTA formulas require regeneration", () => {
+test("analyst-style campaign language is rejected", () => {
+  assert.equal(containsArtificialOutreachLanguage("Could we look at where that delay is affecting the customer journey?"), true);
+  assert.equal(containsArtificialOutreachLanguage("The first-visit friction may affect prospective customers."), true);
+  assert.equal(containsArtificialOutreachLanguage("I noticed the estimate form takes a while to show up."), false);
+});
+
+test("meta, fragment, and recurring CTA formulas require regeneration", () => {
   assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
   assert.equal(ctaNeedsRegeneration("Brief consultation about improving the site."), true);
   assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), true);
   assert.equal(ctaNeedsRegeneration("Would it be useful to look at this?"), true);
   assert.equal(ctaNeedsRegeneration("Would it be worth reviewing?"), true);
+  assert.equal(ctaNeedsRegeneration("Could I walk you through what may be slowing the page down?"), true);
+  assert.equal(ctaNeedsRegeneration("Could I show you where the delay may be affecting the experience?"), true);
+  assert.equal(ctaNeedsRegeneration("Could we look at where that delay is affecting the customer journey?"), true);
+  assert.equal(ctaNeedsRegeneration("Can I send a brief assessment of the first-visit friction?"), true);
   assert.equal(ctaNeedsRegeneration("Want me to send over what I found?"), false);
-  assert.equal(ctaNeedsRegeneration("Is this something you'd want me to show you?"), false);
-  assert.equal(ctaNeedsRegeneration("Does that match what you've noticed on the site?"), false);
+  assert.equal(ctaNeedsRegeneration("Want to see what I found?"), false);
+  assert.equal(ctaNeedsRegeneration("Does that match what you've noticed?"), false);
 });
 
-test("stored drafts can use CTA validation when CTA is available", () => {
-  const body = "Hi,\n\nThe homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.\n\nI build custom websites for service businesses, so this stood out to me.";
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would you be open to a quick conversation about it?"), true);
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Want me to send over what I found?"), false);
+test("stored drafts can use natural-language and CTA validation", () => {
+  const body = "Hi,\n\nI noticed the estimate form takes a while to show up. Someone comparing roofers may go back to the search results instead of waiting.\n\nI build custom websites for service businesses, so this stood out to me.";
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate form", "Could I walk you through where the delay may be getting in the way?"), true);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate form", "Want me to send over what I found?"), false);
 });
