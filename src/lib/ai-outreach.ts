@@ -13,7 +13,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v10";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v11";
 
 function schema() {
   return {
@@ -91,9 +91,10 @@ export function hasUnverifiedSalutation(value: string) {
 }
 
 export function containsSenderIdentity(value: string, senderName: string) {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ");
   const normalizedSender = senderName.trim().replace(/\s+/g, " ").toLowerCase();
-  if (!normalizedSender) return false;
-  return value.toLowerCase().replace(/\s+/g, " ").includes(normalizedSender);
+  if (normalizedSender && normalized.includes(normalizedSender)) return true;
+  return /\bi(?:'m| am)\s+(?:a\s+)?web developer\b|\bi\s+(?:build|design|develop|work on)\s+[^.!?\n]{0,45}\bwebsites?\b|\bi\s+work with\s+service businesses\b|\bi\s+help\s+service businesses\s+[^.!?\n]{0,45}\bwebsites?\b/i.test(value);
 }
 
 export function normalizeOutreachBody(value: string) {
@@ -121,33 +122,33 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
 }
 
 const HARD_OUTREACH_RULES = [
-  "Write Touch 1 as concise evidence-backed direct-response outreach: a neutral greeting, one concrete observation, one plausible business consequence, why that consequence matters to the owner, one brief sender-context sentence, and one low-friction question.",
-  "Write the first cold email from exactly one selected, evidence-backed material finding as the concrete hook.",
+  "Write Touch 1 like a real one-to-one cold email from one businessperson to another. The finished email should sound natural when read aloud, not like a checklist of persuasion techniques or an audit summary.",
+  "Build the email around exactly one selected, evidence-backed material finding. Make one persuasive argument from that finding rather than trying to make every possible sales argument in Touch 1.",
   "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
   "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied.",
-  "Never state imagined visitor behavior as observed fact. Conditional consequences are allowed when they follow directly from the selected finding and the observed business or customer-action context.",
-  "Plausible hypothetical buying situations are explicitly allowed when grounded in the supplied business type, selected finding, and observed page role or CTA. For example, a homeowner comparing roofers may go back to the search results rather than wait, or a paid-ad visitor may leave before reaching an inspection form. Frame these as possibilities using language such as someone, may, could, or if; never claim they definitely happened.",
-  "Use self-interest and loss aversion where supported. Translate the finding into owner-level stakes such as making the business harder to choose, weakening customer confidence, adding friction before an inquiry, making a competitor easier to choose, or getting less value from traffic already reaching the site.",
-  "When useful, create one short mental picture of the buying situation so the owner can see why the issue matters. Do not invent demographic details, motivations, or circumstances beyond the supplied business context.",
-  "Create curiosity instead of explaining the entire remedy. Surface the larger business question and leave enough unresolved that a reply or consultation feels useful.",
+  "Never state imagined visitor behavior as observed fact. Conditional business consequences are allowed when they follow directly from the selected finding.",
+  "Treat CASHVERTISING principles as tools, not boxes to check. Use self-interest, loss aversion, mental imagery, competitive risk, or curiosity only when they make this particular email stronger. Do not force all of them into every draft.",
+  "If a hypothetical buying situation makes the consequence clearer, use at most one short scenario and frame it as a possibility. Otherwise skip the scenario and state the consequence plainly.",
+  "Do not stack multiple consequence frames in one email. For example, do not combine an urgent-customer scenario, returning to Google, choosing a competitor, lost traffic value, weakened trust, and reduced inquiries in the same paragraph. Pick the single consequence that best fits the finding.",
+  "Prefer plain owner-facing language. Avoid analyst phrasing such as primary page, acquisition path, acquisition asset, business proposition, material limitation, conversion path, or people already reaching the site when simpler language would sound more natural.",
   "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, benchmark names, crawler failures, evidence sources, or internal Lead Miner terminology.",
-  "Translate technical evidence into ordinary business language without overstating the consequence. Use conditional business-impact language when actual visitor behavior is not observed.",
-  "Do not use prospect-facing consultant jargon such as acquisition asset, customer-acquisition asset, material limitation, optimization engagement, or conversion path. Say what the owner or customer actually experiences instead.",
-  "Do not prescribe the implementation fix in the cold email. Do not give the prospect a checklist, step-by-step remedy, or DIY instructions. The purpose is to surface the business problem and open a conversation, not solve it in the email.",
+  "Translate technical evidence into ordinary business language without overstating it. A slow measured page can be described as taking a while to show its important content; do not turn the email into a performance report.",
+  "Do not prescribe the implementation fix or give a DIY checklist. Create enough understanding of the problem to make a reply or conversation worthwhile.",
   "Never minimize the opportunity with language such as simple cleanup, quick fix, easy change, small update, just change, simply replace, one primary phone, or one monitored email.",
-  "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. Frame the unresolved question around whether continuing to patch the current website makes sense versus replacing it with a stronger business asset.",
-  "If qualificationDecision is optimization_candidate, focus on the meaningful limitation and the business consequence of leaving it unresolved. Treat the existing website as fundamentally viable and do not exaggerate the issue into a rebuild case.",
-  "Do not pitch a trivial content-maintenance service. If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
-  "No verified contact-person name is supplied. Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. Do not add a recipient name, business name, team, owner, 'there', or any other invented personalization to the greeting.",
-  "After the greeting, the first substantive sentence must contain a concrete observation tied to the selected finding. Do not open the substance with filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, I found your website, or My name is.",
-  "After establishing the prospect's problem and consequence, include exactly one short sender-context sentence using only senderIdentity. Identify the sender by full name and naturally explain that the sender is a web developer who builds custom websites for service businesses. Keep this sentence brief; do not lead with it, list credentials, brag, or turn the email into a bio.",
-  "Use the sender context to answer the implicit question 'who is this and why are they emailing me?' without taking attention away from the prospect's business problem.",
+  "If qualificationDecision is rebuild_candidate, the selected finding may be one symptom of a broader website weakness. Do not imply that a tiny standalone edit resolves the opportunity, but do not force a rebuild pitch into Touch 1 either.",
+  "If qualificationDecision is optimization_candidate, treat the existing website as fundamentally viable. Focus on the meaningful limitation without exaggerating it into a rebuild case.",
+  "If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
+  "Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. No verified contact-person name is supplied, so do not add a recipient name, business name, team, owner, 'there', or any invented personalization to the greeting.",
+  "After the greeting, get to the observation quickly. A natural specific opener such as 'I noticed the Weatherford page takes a while to show the quote options' is acceptable. Do not use filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, or I found your website.",
+  "Keep the problem and consequence compact. Usually one short paragraph or two brief paragraphs is enough before the sender context.",
+  "Include a brief, natural sender-context sentence or clause using senderIdentity so the prospect understands who is emailing them and why the observation is relevant. Do not force the exact wording 'I'm Brian Woodson, a web developer who builds custom websites for service businesses.' Vary it naturally. Examples of acceptable shapes include 'I build custom websites for service businesses, and this is the kind of issue I work on,' 'I'm Brian, a web developer focused on service-business websites,' or another concise equivalent grounded only in senderIdentity.",
+  "Do not lead with the sender bio, list credentials, brag, or make the email about the sender. The prospect's problem comes first.",
+  "Use one simple low-friction CTA. The CTA does not need to restate the whole problem or demonstrate another persuasion technique. Natural questions such as 'Would you be open to a quick conversation about it?' are allowed when the preceding copy has already established the reason to care.",
+  "Make the cta field the exact prospect-facing question used in bodyText. It must be a complete question, not an instruction to the writer or a fragment.",
   "After the CTA, sign off with the sender's first name on its own line. Do not add a long signature block to bodyText.",
   "Never emit placeholder text or placeholder identities such as [Name], {First Name}, <Company>, Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD.",
-  "Keep the email concise, specific, and natural. Prefer roughly 90 to 160 words including the greeting, sender-context sentence, CTA, and sign-off.",
-  "Do not use fake familiarity, generic compliments, placeholders, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
-  "Use one CTA, and make the cta field the exact prospect-facing question used in the email. It must be a complete question, not an instruction to the writer and not a fragment.",
-  "The CTA should continue the unresolved business question rather than defaulting to generic website-service language. Vary the wording naturally. A consultation can be implied or explicitly offered, but do not default to formulas such as 'brief consultation about improving the site.'",
+  "Keep the email concise. Prefer roughly 70 to 120 words including greeting, sender context, CTA, and sign-off. Shorter is better when the point is already clear.",
+  "Do not use fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
   "Return only the required structured draft.",
 ].join(" ");
 
@@ -198,7 +199,7 @@ export async function generateOutreachDraft(input: {
       verifiedPersonNameAvailable: false,
       salutationAllowed: true,
       requiredGreeting: "Hi,",
-      openingRequirement: "After the neutral greeting, start directly with the specific evidence-backed observation; do not fabricate a recipient identity.",
+      openingRequirement: "After the neutral greeting, get quickly to the specific evidence-backed observation without fabricating a recipient identity.",
     },
     qualificationContext: {
       decision: input.qualificationDecision ?? null,
@@ -250,7 +251,7 @@ export async function generateOutreachDraft(input: {
     throw new Error("OpenAI outreach draft used a generic filler opening instead of the selected evidence-backed observation");
   }
   if (!containsSenderIdentity(draft.bodyText, senderName)) {
-    throw new Error("OpenAI outreach draft omitted the configured sender identity");
+    throw new Error("OpenAI outreach draft omitted natural sender context");
   }
   if (containsMinimizingRemediation(draft.bodyText)) {
     throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
