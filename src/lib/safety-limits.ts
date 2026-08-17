@@ -7,17 +7,18 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 }
 
 /**
- * Hard server-side ceilings. Environment values may tune behavior within these
- * bounds, but API callers cannot raise them.
+ * Hard server-side ceilings. Research batch ceilings intentionally match the
+ * Settings range so Research Batch Size is authoritative from 1-100. Other
+ * environment values may tune behavior within their bounds.
  */
 export const SAFETY_LIMITS = {
   aiResearchConcurrency: envInt("AI_RESEARCH_CONCURRENCY", 2, 1, 5),
   emailEnrichmentConcurrency: envInt("EMAIL_ENRICHMENT_CONCURRENCY", 3, 1, 6),
-  bulkResearchMax: envInt("BULK_RESEARCH_MAX", 100, 1, 100),
+  bulkResearchMax: 100,
   bulkEnrichmentMax: envInt("BULK_ENRICHMENT_MAX", 50, 1, 100),
   automationReplySyncMax: envInt("AUTOMATION_REPLY_SYNC_MAX", 50, 1, 100),
   automationEnrichmentMax: envInt("AUTOMATION_ENRICHMENT_MAX", 10, 1, 25),
-  automationResearchMax: envInt("AUTOMATION_RESEARCH_MAX", 100, 1, 100),
+  automationResearchMax: 100,
   automationStaleSendMax: envInt("AUTOMATION_STALE_SEND_MAX", 10, 1, 25),
   automationFollowupMax: envInt("AUTOMATION_FOLLOWUP_MAX", 20, 1, 50),
   automationSendMax: envInt("AUTOMATION_SEND_MAX", 20, 1, 50),
