@@ -6,6 +6,7 @@ import {
   containsGenericOpening,
   containsMinimizingRemediation,
   containsPlaceholderText,
+  containsProspectFacingPerformanceMeasurement,
   containsSenderIdentity,
   containsTechnicalAuditLanguage,
   ctaNeedsRegeneration,
@@ -20,8 +21,8 @@ import {
   subjectNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v14", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v14");
+test("outreach prompt version is v15", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v15");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
@@ -130,9 +131,11 @@ test("agreed human Touch 1 voice remains acceptable", () => {
   assert.equal(outreachDraftNeedsRegeneration(body, "Weatherford roofing page", "Want me to send over what I found?"), false);
 });
 
-test("sender identity is recognized from natural configured context", () => {
+test("sender identity accepts varied natural web-development context", () => {
   assert.equal(containsSenderIdentity("I build custom websites for service businesses, so this stood out to me.", "Brian Woodson"), true);
   assert.equal(containsSenderIdentity("I'm a web developer and this stood out to me.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("I spend most of my time building websites for service businesses, so I tend to notice this stuff.", "Brian Woodson"), true);
+  assert.equal(containsSenderIdentity("My work involves web development for service businesses, which is why I noticed it.", "Brian Woodson"), true);
   assert.equal(containsSenderIdentity("This stood out to me.", "Brian Woodson"), false);
 });
 
@@ -151,6 +154,15 @@ test("technical audit language is never prospect-facing", () => {
   assert.equal(containsTechnicalAuditLanguage("The page has an LCP problem in Lighthouse."), true);
   assert.equal(containsTechnicalAuditLanguage("PageSpeed shows a 7200 ms delay."), true);
   assert.equal(containsTechnicalAuditLanguage("The page takes a pretty long time to show up."), false);
+});
+
+test("exact performance measurements are private evidence only", () => {
+  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took about seven seconds to appear."), true);
+  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took 7.1 seconds to appear."), true);
+  assert.equal(containsProspectFacingPerformanceMeasurement("The page responded in 910 ms."), true);
+  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage takes noticeably longer than it should to show the main content."), false);
+  const body = "Hi,\n\nI checked the homepage and the main content took about seven seconds to appear. Someone comparing roofers may not wait around.\n\nI work in web development for service businesses, so this stood out to me.\n\nWant me to send what I found?\n\nBrian";
+  assert.equal(outreachDraftNeedsRegeneration(body, "Homepage load", "Want me to send what I found?"), true);
 });
 
 test("Touch 1 rejects meeting asks but allows tiny permission asks", () => {
@@ -174,6 +186,7 @@ test("subjects stay mundane, short, and specific", () => {
   assert.equal(subjectNeedsRegeneration("Estimate form"), false);
   assert.equal(subjectNeedsRegeneration("Quick question"), true);
   assert.equal(subjectNeedsRegeneration("FREE WEBSITE AUDIT"), true);
+  assert.equal(subjectNeedsRegeneration("Homepage took seven seconds"), true);
   assert.equal(subjectNeedsRegeneration("An urgent opportunity to improve your roofing website today"), true);
 });
 
