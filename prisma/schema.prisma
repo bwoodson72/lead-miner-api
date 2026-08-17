@@ -191,6 +191,7 @@ model OutreachMessage {
   confidence Float?
   requiresReview Boolean @default(true) @map("requires_review")
   generationReason String? @map("generation_reason") @db.Text
+  promptVersion String? @map("prompt_version")
   scheduledAt DateTime? @map("scheduled_at")
   status String @default("draft")
   idempotencyKey String? @unique @map("idempotency_key")
@@ -206,6 +207,7 @@ model OutreachMessage {
   @@index([providerThreadId])
   @@index([status, scheduledAt])
   @@index([status, sendAttemptedAt])
+  @@index([kind, status, promptVersion])
   @@map("outreach_messages")
 }
 
