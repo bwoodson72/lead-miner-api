@@ -12,6 +12,7 @@ import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { regenerateUnsentOutreach } from "./outreach-maintenance.js";
 import { MANUAL_OUTREACH_VERSION, isCurrentOutreachPromptVersion } from "./outreach-version.js";
 import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
+import { getContactIdentityRiskReason } from "./contact-safety.js";
 
 const MessagePatchSchema = z.object({
   subject: z.string().min(1).max(120).optional(),
@@ -41,7 +42,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       const messages = await prisma.outreachMessage.findMany({
         where: { status: { in: ["draft", "approved"] } },
         orderBy: [{ status: "asc" }, { generatedAt: "desc" }],
-        include: { lead: { include: { assetAssessments: { orderBy: { createdAt: "desc" }, take: 1, include: { findings: { orderBy: [{ significance: "desc" }, { confidence: "desc" }] } } }, problems: { orderBy: { confidence: "desc" }, take: 4 }, scores: { orderBy: { createdAt: "desc" }, take: 1 } } } },
+        include: { lead: { include: { contacts: true, assetAssessments: { orderBy: { createdAt: "desc" }, take: 1, include: { findings: { orderBy: [{ significance: "desc" }, { confidence: "desc" }] } } }, problems: { orderBy: { confidence: "desc" }, take: 4 }, scores: { orderBy: { createdAt: "desc" }, take: 1 } } } },
       });
       res.json({ messages, total: messages.length });
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
@@ -94,9 +95,19 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid message id" }); return; }
     let parsed: z.infer<typeof MessagePatchSchema>;
     try { parsed = MessagePatchSchema.parse(req.body); } catch (error) { if (error instanceof ZodError) { invalid(res, error); return; } throw error; }
-    const current = await prisma.outreachMessage.findUnique({ where: { id } });
+    const current = await prisma.outreachMessage.findUnique({ where: { id }, include: { lead: { include: { contacts: true } } } });
     if (!current) { res.status(404).json({ error: "Message not found" }); return; }
     if (["sending", "sent"].includes(current.status)) { res.status(409).json({ error: "Messages cannot be edited after sending has started" }); return; }
+    if (parsed.status === "approved") {
+      const contactRisk = getContactIdentityRiskReason(current.lead);
+      if (contactRisk) { res.status(409).json({ error: `Approval blocked: ${contactRisk}` }); return; }
+      const nextSubject = parsed.subject?.trim() ?? current.subject;
+      const nextBody = parsed.bodyText?.trim() ?? current.bodyText;
+      if (outreachDraftNeedsRegeneration(nextBody, nextSubject, current.cta ?? "")) {
+        res.status(409).json({ error: "Approval blocked: draft fails current Touch 1 quality rules and must be regenerated or edited" });
+        return;
+      }
+    }
     const data: Record<string, unknown> = {};
     if (parsed.subject) data.subject = parsed.subject.trim();
     if (parsed.bodyText) data.bodyText = parsed.bodyText.trim();
@@ -153,10 +164,18 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     try { parsed = BulkIdsSchema.parse(req.body); } catch (error) { if (error instanceof ZodError) { invalid(res, error); return; } throw error; }
     try {
       const settings = await getAppSettings(prisma);
-      const messages = await prisma.outreachMessage.findMany({ where: { id: { in: parsed.ids }, status: "draft" }, include: { lead: true } });
+      const messages = await prisma.outreachMessage.findMany({ where: { id: { in: parsed.ids }, status: "draft" }, include: { lead: { include: { contacts: true } } } });
       if (messages.length !== parsed.ids.length) { res.status(409).json({ error: "Every selected message must still be an unsent draft" }); return; }
-      const unsafe = messages.filter((message) => !isCurrentOutreachPromptVersion(message.kind, message.promptVersion) || outreachDraftNeedsRegeneration(message.bodyText, message.subject) || message.requiresReview || (message.confidence ?? 0) < settings.minAutoApproveConfidence || (message.lead.priorityScore ?? 0) < settings.minAutoApprovePriority);
-      if (unsafe.length) { res.status(409).json({ error: "Bulk approval blocked because one or more drafts are stale or do not meet configured quality thresholds", messageIds: unsafe.map((message) => message.id) }); return; }
+      const unsafe = messages.flatMap((message) => {
+        const contactRisk = getContactIdentityRiskReason(message.lead);
+        const stale = !isCurrentOutreachPromptVersion(message.kind, message.promptVersion);
+        const badDraft = outreachDraftNeedsRegeneration(message.bodyText, message.subject, message.cta ?? "");
+        const belowThreshold = message.requiresReview || (message.confidence ?? 0) < settings.minAutoApproveConfidence || (message.lead.priorityScore ?? 0) < settings.minAutoApprovePriority;
+        if (!contactRisk && !stale && !badDraft && !belowThreshold) return [];
+        const reasons = [contactRisk, stale ? "stale prompt version" : null, badDraft ? "fails current Touch 1 quality rules" : null, belowThreshold ? "below configured approval thresholds or requires review" : null].filter(Boolean);
+        return [{ id: message.id, reasons }];
+      });
+      if (unsafe.length) { res.status(409).json({ error: "Bulk approval blocked because one or more drafts fail recipient, freshness, quality, or approval checks", messageIds: unsafe.map((item) => item.id), issues: unsafe }); return; }
       await prisma.$transaction(async (tx) => {
         await tx.outreachMessage.updateMany({ where: { id: { in: parsed.ids } }, data: { status: "approved", approvedAt: new Date() } });
         for (const message of messages) await tx.activity.create({ data: { leadId: message.leadId, type: "message_approved", summary: "Outreach bulk-approved" } });
