@@ -38,6 +38,35 @@ export async function regenerateUnsentOutreach(
   for (const message of candidates) {
     try {
       if (message.kind === "initial") {
+        const alreadyStarted = await prisma.outreachMessage.findFirst({
+          where: {
+            leadId: message.leadId,
+            kind: "initial",
+            sequenceNumber: 1,
+            status: { in: ["sending", "sent"] },
+          },
+          select: { id: true, status: true },
+        });
+
+        if (alreadyStarted) {
+          await prisma.$transaction(async (tx) => {
+            await tx.outreachMessage.updateMany({
+              where: { leadId: message.leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved"] } },
+              data: { status: "cancelled", requiresReview: true, sendError: `Stale initial draft cancelled because initial outreach is already ${alreadyStarted.status}` },
+            });
+            await tx.activity.create({
+              data: {
+                leadId: message.leadId,
+                type: "legacy_outreach_invalidated",
+                summary: `Cancelled stale unsent initial outreach because an initial message is already ${alreadyStarted.status}`,
+                metadata: { previousMessageId: message.id, activeMessageId: alreadyStarted.id, previousPromptVersion: message.promptVersion },
+              },
+            });
+          });
+          results.push({ messageId: message.id, leadId: message.leadId, kind: message.kind, success: true, action: "cancelled_already_contacted" });
+          continue;
+        }
+
         const replacement = await ensureInitialOutreachDraft(prisma, message.leadId, true);
         if (!replacement) throw new Error("Initial outreach regeneration returned no replacement draft");
         await prisma.$transaction(async (tx) => {
