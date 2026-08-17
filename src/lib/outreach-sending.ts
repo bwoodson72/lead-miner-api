@@ -54,10 +54,10 @@ async function globalSuppressionReason(prisma: PrismaClient, lead: any) {
 }
 
 async function assertSendEligible(prisma: PrismaClient, messageId: number) {
-  const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true } } } });
+  const message = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { lead: { include: { suppressions: true, contacts: true } } } });
   if (!message) throw new Error("Message not found");
   if (!isCurrentOutreachPromptVersion(message.kind, message.promptVersion)) throw new Error(staleOutreachReason(message.kind, message.promptVersion) ?? "Outreach draft is stale");
-  if (outreachDraftNeedsRegeneration(message.bodyText, message.subject)) throw new Error("Outreach draft failed current recipient/opening quality checks and must be regenerated or manually edited before sending");
+  if (outreachDraftNeedsRegeneration(message.bodyText, message.subject, message.cta ?? "")) throw new Error("Outreach draft failed current recipient/opening quality checks and must be regenerated or manually edited before sending");
   if (message.sequenceNumber > TOTAL_OUTREACH_TOUCHES) throw new Error(`Outreach sequence is capped at ${TOTAL_OUTREACH_TOUCHES} total touches`);
   if (message.scheduledAt && message.scheduledAt > new Date()) throw new Error(`Message is scheduled for ${message.scheduledAt.toISOString()}`);
   const paused = await prisma.suppression.findUnique({ where: { type_value: { type: "global", value: "outreach" } } });
