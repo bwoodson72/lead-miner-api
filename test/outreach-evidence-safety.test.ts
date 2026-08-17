@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  containsConsultantJargon,
   containsGenericOpening,
   containsMinimizingRemediation,
   containsPlaceholderText,
+  ctaNeedsRegeneration,
   generateOutreachDraft,
   hasUnverifiedSalutation,
   isPlaceholderBusinessName,
@@ -90,4 +92,23 @@ test("existing drafts with fabricated team greetings require regeneration", () =
 test("specific observation without a salutation remains acceptable", () => {
   const body = "The mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.";
   assert.equal(outreachDraftNeedsRegeneration(body, "A question about the site"), false);
+});
+
+test("prospect-facing consultant jargon is rejected", () => {
+  assert.equal(containsConsultantJargon("This material limitation weakens the acquisition asset."), true);
+  assert.equal(containsConsultantJargon("Someone comparing roofers may leave before reaching the estimate form."), false);
+});
+
+test("meta, fragment, and generic consultation CTAs require regeneration", () => {
+  assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
+  assert.equal(ctaNeedsRegeneration("Brief consultation about improving the site."), true);
+  assert.equal(ctaNeedsRegeneration("Would you be open to a brief consultation about improving the site's responsiveness?"), true);
+  assert.equal(ctaNeedsRegeneration("Would it be worth looking at what a homeowner sees before they reach the estimate form?"), false);
+  assert.equal(ctaNeedsRegeneration("Would you want to know whether this is making it easier for a prospect to choose the next roofer?"), false);
+});
+
+test("stored drafts can use CTA validation when CTA is available", () => {
+  const body = "The homepage takes long enough to show its main content that someone comparing roofers may go back to the search results before reaching the estimate form.";
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Invite a brief consultation about improving the site."), true);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Would it be worth looking at what a homeowner sees before reaching the estimate form?"), false);
 });
