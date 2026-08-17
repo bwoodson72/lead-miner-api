@@ -51,14 +51,7 @@ export async function prioritizeLead(prisma: PrismaClient, leadId: number) {
 
   await prisma.$transaction(async (tx) => {
     await tx.lead.update({ where: { id: leadId }, data: { priorityScore: priority.score, priorityBreakdown: priority } });
-    await tx.activity.create({
-      data: {
-        leadId,
-        type: "priority_calculated",
-        summary: `Opportunity priority calculated: ${priority.score}`,
-        metadata: priority,
-      },
-    });
+    await tx.activity.create({ data: { leadId, type: "priority_calculated", summary: `Opportunity priority calculated: ${priority.score}`, metadata: priority } });
   });
   return priority;
 }
@@ -116,36 +109,9 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
       })),
     }, settings.outreachModel));
     await prisma.$transaction(async (tx) => {
-      await tx.lead.update({
-        where: { id: leadId },
-        data: {
-          primaryOutreachAngle: generated.result.angle,
-          primaryOutreachAngleReason: generated.result.rationale,
-          primaryOutreachAngleConfidence: generated.result.confidence,
-          primaryOutreachFindingId: generated.result.findingId,
-          outreachPreparedAt: new Date(),
-        },
-      });
-      await tx.activity.create({
-        data: {
-          leadId,
-          type: "outreach_angle_selected",
-          summary: generated.result.angle,
-          metadata: { findingId: generated.result.findingId, confidence: generated.result.confidence, rationale: generated.result.rationale, model: generated.model },
-        },
-      });
-      await tx.aIJob.update({
-        where: { id: job.id },
-        data: {
-          status: "complete",
-          model: generated.model,
-          inputTokens: generated.inputTokens,
-          cachedTokens: generated.cachedTokens,
-          outputTokens: generated.outputTokens,
-          estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens),
-          completedAt: new Date(),
-        },
-      });
+      await tx.lead.update({ where: { id: leadId }, data: { primaryOutreachAngle: generated.result.angle, primaryOutreachAngleReason: generated.result.rationale, primaryOutreachAngleConfidence: generated.result.confidence, primaryOutreachFindingId: generated.result.findingId, outreachPreparedAt: new Date() } });
+      await tx.activity.create({ data: { leadId, type: "outreach_angle_selected", summary: generated.result.angle, metadata: { findingId: generated.result.findingId, confidence: generated.result.confidence, rationale: generated.result.rationale, model: generated.model } } });
+      await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, cachedTokens: generated.cachedTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
     });
     return { reused: false, ...generated.result, packetHash };
   } catch (error) {
@@ -158,10 +124,7 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number, force = false) {
   const settings = await getAppSettings(prisma);
   const { lead, assessment } = await loadOpportunity(prisma, leadId);
-  const existing = await prisma.outreachMessage.findFirst({
-    where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } },
-    orderBy: { generatedAt: "desc" },
-  });
+  const existing = await prisma.outreachMessage.findFirst({ where: { leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } }, orderBy: { generatedAt: "desc" } });
   if (existing && !force) {
     if (lead.status === "qualified") await prisma.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach" } });
     return existing;
@@ -181,15 +144,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
     researchSummary: assessment.researchSummary,
     decisionReason: assessment.decisionReason,
     angle: lead.primaryOutreachAngle,
-    finding: {
-      id: selectedFinding.id,
-      category: selectedFinding.category,
-      title: selectedFinding.title,
-      evidence: selectedFinding.evidence,
-      assetCapability: selectedFinding.assetCapability,
-      confidence: selectedFinding.confidence,
-      significance: selectedFinding.significance,
-    },
+    finding: { id: selectedFinding.id, category: selectedFinding.category, title: selectedFinding.title, evidence: selectedFinding.evidence, assetCapability: selectedFinding.assetCapability, confidence: selectedFinding.confidence, significance: selectedFinding.significance },
   };
   const packetHash = hashAiPacket(packet);
   if (!force) {
@@ -209,20 +164,9 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       qualificationReason: assessment.decisionReason,
       qualificationDecision: assessment.decision,
       assetStrength: assessment.assetStrength,
-      selectedFinding: {
-        id: selectedFinding.id,
-        category: selectedFinding.category,
-        title: selectedFinding.title,
-        evidence: selectedFinding.evidence,
-        assetCapability: selectedFinding.assetCapability,
-        confidence: selectedFinding.confidence,
-        significance: selectedFinding.significance,
-      },
+      selectedFinding: { id: selectedFinding.id, category: selectedFinding.category, title: selectedFinding.title, evidence: selectedFinding.evidence, assetCapability: selectedFinding.assetCapability, confidence: selectedFinding.confidence, significance: selectedFinding.significance },
     }, settings.outreachModel, settings.minProblemConfidence, settings.outreachInstructions));
-    const shouldAutoApprove = settings.approvalMode === "auto_safe"
-      && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority
-      && generated.draft.confidence >= settings.minAutoApproveConfidence
-      && !generated.draft.requiresReview;
+    const shouldAutoApprove = settings.approvalMode === "auto_safe" && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority && generated.draft.confidence >= settings.minAutoApproveConfidence && !generated.draft.requiresReview;
     const status = shouldAutoApprove ? "approved" : "draft";
     return await prisma.$transaction(async (tx) => {
       if (force && existing && ["draft", "approved"].includes(existing.status)) await tx.outreachMessage.update({ where: { id: existing.id }, data: { status: "cancelled" } });
@@ -238,31 +182,14 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
           confidence: generated.draft.confidence,
           requiresReview: generated.draft.requiresReview,
           generationReason: force ? "Regenerated by operator request" : null,
+          promptVersion: OUTREACH_PROMPT_VERSION,
           status,
           approvedAt: shouldAutoApprove ? new Date() : null,
         },
       });
       await tx.lead.update({ where: { id: leadId }, data: { status: "ready_for_outreach", outreachPreparedAt: new Date() } });
-      await tx.activity.create({
-        data: {
-          leadId,
-          type: shouldAutoApprove ? "message_auto_approved" : "message_generated",
-          summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`,
-          metadata: { confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, findingId: selectedFinding.id, qualificationDecision: assessment.decision, model: generated.model, approvalMode: settings.approvalMode },
-        },
-      });
-      await tx.aIJob.update({
-        where: { id: aiJob.id },
-        data: {
-          status: "complete",
-          model: generated.model,
-          inputTokens: generated.inputTokens,
-          cachedTokens: generated.cachedTokens,
-          outputTokens: generated.outputTokens,
-          estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens),
-          completedAt: new Date(),
-        },
-      });
+      await tx.activity.create({ data: { leadId, type: shouldAutoApprove ? "message_auto_approved" : "message_generated", summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`, metadata: { confidence: generated.draft.confidence, requiresReview: generated.draft.requiresReview, findingId: selectedFinding.id, qualificationDecision: assessment.decision, model: generated.model, approvalMode: settings.approvalMode, promptVersion: OUTREACH_PROMPT_VERSION } } });
+      await tx.aIJob.update({ where: { id: aiJob.id }, data: { status: "complete", model: generated.model, inputTokens: generated.inputTokens, cachedTokens: generated.cachedTokens, outputTokens: generated.outputTokens, estimatedCost: estimateAiCost(generated.model, generated.inputTokens, generated.outputTokens), completedAt: new Date() } });
       return message;
     });
   } catch (error) {
