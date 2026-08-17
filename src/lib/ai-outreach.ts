@@ -6,6 +6,15 @@ import {
   containsUnverifiedVisitorVisibility,
 } from "./research-evidence-safety.js";
 
+const PsychologicalLeverSchema = z.enum([
+  "loss_aversion",
+  "self_interest",
+  "competitive_choice",
+  "protect_existing_spend",
+  "trust",
+  "ease_of_action",
+]);
+
 const OutreachDraftSchema = z.object({
   subject: z.string().min(1).max(120),
   bodyText: z.string().min(1).max(2500),
@@ -16,7 +25,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v13";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v14";
 
 function schema() {
   return {
@@ -47,7 +56,7 @@ export function sanitizeProspectFacingEvidence(value: string | null): string | n
     .replace(/\bperformance score\b/gi, "site performance")
     .replace(/\bscore(?:d)?\s*(?:of|at|:)\s*\d+(?:\/100)?\b/gi, "showed weak performance")
     .replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?)\b/gi, "a noticeable delay")
-    .replace(/\b\d+(?:\.\d+)?\s*(?:s|seconds?)\b/gi, "several seconds")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:s|seconds?)\b/gi, "a long time")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -57,25 +66,54 @@ export function containsMinimizingRemediation(value: string) {
 }
 
 export function containsConsultantJargon(value: string) {
-  return /\b(?:acquisition asset|material limitation|optimization engagement|conversion paths?|customer-acquisition asset)\b/i.test(value);
+  return /\b(?:acquisition asset|business asset|material limitation|optimization engagement|conversion paths?|customer-acquisition asset|acquisition paths?|material constraint|meaningful optimization)\b/i.test(value);
 }
 
 export function containsArtificialOutreachLanguage(value: string) {
-  return /\b(?:customer journey|visitor experience|prospective customers?|prospective clients?|high-intent visitors?|business proposition|primary content|initial presentation|initial usability|acquisition structure|acquisition path|first-visit friction|material constraint|meaningful optimization|page responsiveness)\b|\bfriction\b|\b(?:evaluate|engage) the business\b/i.test(value);
+  return /\b(?:customer journey|visitor experience|prospective customers?|prospective clients?|high-intent visitors?|business proposition|initial presentation|initial usability|first-visit friction|page responsiveness)\b|\bfriction\b|\b(?:evaluate|engage) the business\b/i.test(value);
+}
+
+export function containsTechnicalAuditLanguage(value: string) {
+  return /\b(?:Lighthouse|PageSpeed(?: Insights)?|Core Web Vitals?|LCP|CLS|TBT|performance score|audit score|crawler|crawl result|evidence source|milliseconds?|\d+(?:\.\d+)?\s*ms)\b/i.test(value);
 }
 
 export function ctaNeedsRegeneration(value: string) {
   const cta = value.trim();
   if (!cta) return true;
-  if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
   if (!/\?\s*$/.test(cta)) return true;
+  if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
+  if (/\b(?:consultation|meeting|schedule|calendar|book|15 minutes|10 minutes|20 minutes|quick call|brief call|conversation)\b/i.test(cta)) return true;
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
-  if (/^would you be open to\b/i.test(cta)) return true;
-  if (/^would it be (?:useful|worth)\b/i.test(cta)) return true;
-  if (/^could i (?:walk you through|show you)\b/i.test(cta)) return true;
-  if (/^could we look at\b/i.test(cta)) return true;
-  if (/^can i send (?:you )?(?:a )?brief assessment\b/i.test(cta)) return true;
-  if (containsArtificialOutreachLanguage(cta)) return true;
+  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta)) return true;
+  return false;
+}
+
+function normalizedCtaSignature(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 4)
+    .join(" ");
+}
+
+export function ctaTooSimilarToRecent(value: string, recentCtas: string[]) {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  const signature = normalizedCtaSignature(value);
+  return recentCtas.some((recent) => {
+    const normalizedRecent = recent.trim().toLowerCase().replace(/\s+/g, " ");
+    return normalized === normalizedRecent || (signature.length > 0 && signature === normalizedCtaSignature(recent));
+  });
+}
+
+export function subjectNeedsRegeneration(value: string) {
+  const subject = value.trim();
+  if (!subject) return true;
+  if (subject.split(/\s+/).length > 9) return true;
+  if (/\b(?:free audit|website audit|urgent|act now|limited time|quick question|proposal|opportunity)\b/i.test(subject)) return true;
+  if (/[!]{1,}/.test(subject)) return true;
   return false;
 }
 
@@ -104,7 +142,7 @@ export function containsSenderIdentity(value: string, senderName: string) {
   const normalized = value.toLowerCase().replace(/\s+/g, " ");
   const normalizedSender = senderName.trim().replace(/\s+/g, " ").toLowerCase();
   if (normalizedSender && normalized.includes(normalizedSender)) return true;
-  return /\bi(?:'m| am)\s+(?:a\s+)?web developer\b|\bi\s+(?:build|design|develop|work on)\s+[^.!?\n]{0,45}\bwebsites?\b|\bi\s+work with\s+service businesses\b|\bi\s+help\s+service businesses\s+[^.!?\n]{0,45}\bwebsites?\b/i.test(value);
+  return /\bi(?:'m| am)\s+(?:a\s+)?web developer\b|\bi\s+(?:build|design|develop|work on)\s+[^.!?\n]{0,55}\b(?:websites?|sites?)\b|\bi\s+work with\s+service businesses\b|\bi\s+help\s+service businesses\s+[^.!?\n]{0,55}\b(?:websites?|sites?)\b/i.test(value);
 }
 
 export function normalizeOutreachBody(value: string) {
@@ -112,13 +150,48 @@ export function normalizeOutreachBody(value: string) {
 }
 
 function stripNeutralGreeting(value: string) {
-  return value
-    .replace(/^\s*Hi,\s*(?:\r?\n\s*)+/i, "")
-    .trim();
+  return value.replace(/^\s*Hi,\s*(?:\r?\n\s*)+/i, "").trim();
 }
 
 export function containsGenericOpening(value: string) {
   return /^\s*(?:i hope\b|i (?:just )?wanted to (?:reach out|contact you)|i(?:'m| am) reaching out\b|i came across (?:your|the) (?:website|site)\b|i found (?:your|the) (?:website|site)\b|my name is\b)/i.test(value);
+}
+
+function wordCount(value: string) {
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function ctaAppearsInBody(bodyText: string, cta: string) {
+  const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+  return normalize(bodyText).includes(normalize(cta));
+}
+
+function endsWithSenderFirstName(bodyText: string, senderName: string) {
+  const firstName = senderName.trim().split(/\s+/)[0];
+  if (!firstName) return true;
+  const lastLine = bodyText.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+  return lastLine?.toLowerCase() === firstName.toLowerCase();
+}
+
+function draftValidationIssues(draft: OutreachDraft, senderName: string, recentCtas: string[]) {
+  const issues: string[] = [];
+  if (!hasNeutralGreeting(draft.bodyText)) issues.push("Start exactly with Hi, on its own line.");
+  if (hasUnverifiedSalutation(draft.bodyText)) issues.push("Do not invent a recipient name, owner name, or team greeting.");
+  if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove placeholder or fabricated identity text.");
+  if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) issues.push("Open with the specific observation, not generic cold-email filler.");
+  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push("Briefly establish that the sender builds websites for service businesses.");
+  if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
+  if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
+  if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
+  if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
+  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, or booking in Touch 1.");
+  if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
+  if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
+  if (subjectNeedsRegeneration(draft.subject)) issues.push("Use a mundane, specific subject of nine words or fewer; no hype and no generic Quick question subject.");
+  const words = wordCount(draft.bodyText);
+  if (words < 45 || words > 110) issues.push("Keep the complete email roughly 55-100 words; do not pad it.");
+  if (!endsWithSenderFirstName(draft.bodyText, senderName)) issues.push("Sign off with the sender's first name on its own line.");
+  return issues;
 }
 
 export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", cta = "") {
@@ -129,31 +202,94 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || containsMinimizingRemediation(bodyText)
     || containsConsultantJargon(bodyText)
     || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
+    || containsTechnicalAuditLanguage(`${subject}\n${bodyText}\n${cta}`)
+    || (subject ? subjectNeedsRegeneration(subject) : false)
     || (cta ? ctaNeedsRegeneration(cta) : false);
 }
 
 const HARD_OUTREACH_RULES = [
-  "Write a short cold email that sounds like one person typed it to another person. Use ordinary spoken English and short sentences.",
-  "The supplied observation is a factual note, not copy. Do not mirror its wording or turn it into an audit summary. Rewrite the idea from scratch in everyday language.",
-  "Make one point only: what you noticed and one plausible reason the owner may care. Stop there.",
-  "Do not use sales-analysis language such as friction, customer journey, visitor experience, prospective customer, high-intent visitor, acquisition, conversion path, material limitation, optimization engagement, responsiveness, primary content, or business proposition.",
-  "Do not sound like a consultant presenting findings. Avoid phrases about affecting the experience, evaluating the business, engaging with the site, or where a delay may be getting in the way.",
-  "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied. Never state imagined behavior as something that definitely happened.",
-  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, scores, milliseconds, benchmark names, crawlers, evidence sources, or Lead Miner.",
-  "Do not explain implementation details or prescribe a repair checklist.",
-  "Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. Do not invent a recipient name or team name.",
-  "After the greeting, say what you noticed in plain language. First person is fine. Do not use generic filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, or I found your website.",
-  "Work sender context into the email naturally after the observation. The reader only needs to understand that the sender is a web developer who builds custom websites for service businesses. Do not write a standalone biography paragraph or list credentials.",
-  "End with one short, low-pressure question that asks for a reply, permission to send the details, or a conversation. Keep the question conversational and specific to the email. Do not use formal consultation language or recurring campaign formulas.",
-  "The cta field must exactly match the question used in bodyText and must end with a question mark.",
-  "Sign off with the sender's first name on its own line. No long signature block.",
-  "Keep the full email roughly 50 to 90 words including greeting, sender context, CTA, and sign-off.",
+  "Write Touch 1 as a short email Brian would personally type after noticing one real thing on a business website.",
+  "The goal is only to earn a reply or permission to send the details. Do not try to book a consultation, meeting, calendar slot, or call in this first email.",
+  "Use one verified observation and one owner stake. The persuasion should come from why the fact matters, not from sales language.",
+  "Use the supplied psychological lever as private strategy. Do not name the technique. If a buyer moment is supplied and it reads naturally, use at most one short scenario so the owner can picture the consequence.",
+  "Loss aversion, self-interest, competitive choice, protecting existing spend, trust, and ease of action should shape what you say, not make the email sound like advertising copy.",
+  "Write in ordinary spoken English. Contractions and simple phrases are welcome. Prefer words a service-business owner would use over analyst or consultant terminology.",
+  "Do not copy or lightly paraphrase the private notes. Write the email from scratch as if the sender personally noticed the issue.",
+  "Never invent metrics, traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
+  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, milliseconds, crawlers, evidence sources, Lead Miner, or AI research.",
+  "Do not explain implementation details, diagnose the whole website, prescribe a repair checklist, or sell the project.",
+  "Start bodyText exactly with Hi, on its own line followed by a blank line. Do not invent a recipient name or team name.",
+  "Briefly establish why the sender notices this kind of thing: the sender builds custom websites for service businesses. Work that into the email naturally; do not write a biography paragraph.",
+  "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language.",
+  "The cta field must exactly match that final question in bodyText.",
+  "Sign off with the sender's first name on its own line. No signature block.",
+  "Use a mundane, specific subject tied to the page, location, service, or thing noticed. Keep it under nine words. No hype, fake urgency, Free audit, Website audit, or Quick question.",
+  "Keep the whole email roughly 55 to 100 words.",
   "No fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
   "Return only the required structured draft.",
 ].join(" ");
 
-type LegacyProblem = { title: string; evidence: string; businessConsequence: string; confidence: number; outreachValue: string };
-type SelectedFinding = { id: number; category: string; title: string; evidence: string; assetCapability: string; confidence: number; significance: string };
+type LegacyProblem = {
+  title: string;
+  evidence: string;
+  businessConsequence: string;
+  confidence: number;
+  outreachValue: string;
+};
+
+type SelectedFinding = {
+  id: number;
+  category: string;
+  title: string;
+  evidence: string;
+  assetCapability: string;
+  confidence: number;
+  significance: string;
+};
+
+type OutreachStrategy = {
+  observation: string;
+  ownerStake: string;
+  buyerMoment: string | null;
+  psychologicalLever: z.infer<typeof PsychologicalLeverSchema>;
+};
+
+async function requestDraft(
+  model: string,
+  systemInstructions: string,
+  packet: Record<string, unknown>,
+  rewrite?: { previousDraft: OutreachDraft; issues: string[] },
+) {
+  const env = getEnv();
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
+  const userText = rewrite
+    ? `Rewrite the email from scratch. The previous attempt failed the checks below. Fix the problems without copying its wording or turning the checks into visible prose.\n\nProblems:\n- ${rewrite.issues.join("\n- ")}\n\nPrevious attempt:\n${JSON.stringify(rewrite.previousDraft)}\n\nPrivate strategy notes:\n${JSON.stringify(packet)}`
+    : `Write the first cold email from these private strategy notes. Do not copy the note wording; write the email from scratch:\n${JSON.stringify(packet)}`;
+  const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      input: [
+        { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
+        { role: "user", content: [{ type: "input_text", text: userText }] },
+      ],
+      text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
+    }),
+  }, "OpenAI outreach");
+  if (!response.ok) throw new Error(`OpenAI outreach failed (${response.status}): ${await response.text()}`);
+  const data = await response.json() as any;
+  const raw = data.output_text ?? data.output?.flatMap((output: any) => output.content ?? []).find((content: any) => content.type === "output_text")?.text;
+  if (!raw) throw new Error("OpenAI returned no outreach draft");
+  const parsed = OutreachDraftSchema.parse(JSON.parse(raw));
+  return {
+    draft: { ...parsed, bodyText: normalizeOutreachBody(parsed.bodyText) },
+    model: data.model ?? model,
+    inputTokens: data.usage?.input_tokens ?? 0,
+    cachedTokens: data.usage?.input_tokens_details?.cached_tokens ?? 0,
+    outputTokens: data.usage?.output_tokens ?? 0,
+  };
+}
 
 export async function generateOutreachDraft(input: {
   businessName: string | null;
@@ -161,14 +297,23 @@ export async function generateOutreachDraft(input: {
   keyword: string;
   senderName?: string;
   senderEmail?: string;
-  primaryOutreachAngle: string | null;
-  researchSummary: string | null;
-  qualificationReason: string | null;
   qualificationDecision?: string | null;
-  assetStrength?: string | null;
+  strategy?: OutreachStrategy;
+  recentCtas?: string[];
   selectedFinding?: SelectedFinding;
+  primaryOutreachAngle?: string | null;
+  researchSummary?: string | null;
+  qualificationReason?: string | null;
+  assetStrength?: string | null;
   problems?: LegacyProblem[];
-}, model: string, minFindingConfidence: number, editableInstructions: string): Promise<{ draft: OutreachDraft; model: string; inputTokens?: number; cachedTokens?: number; outputTokens?: number }> {
+}, model: string, minFindingConfidence: number, editableInstructions: string): Promise<{
+  draft: OutreachDraft;
+  model: string;
+  attempts: number;
+  inputTokens?: number;
+  cachedTokens?: number;
+  outputTokens?: number;
+}> {
   let selectedFinding = input.selectedFinding;
   if (!selectedFinding) {
     const legacy = (input.problems ?? [])
@@ -176,27 +321,41 @@ export async function generateOutreachDraft(input: {
       .filter((problem) => !containsUnverifiedVisitorVisibility(`${problem.title} ${problem.evidence} ${problem.businessConsequence}`))
       .filter((problem) => problem.confidence >= minFindingConfidence && problem.outreachValue !== "low")
       .sort((a, b) => b.confidence - a.confidence)[0];
-    if (legacy) selectedFinding = { id: 1, category: "legacy_problem", title: legacy.title, evidence: legacy.evidence, assetCapability: legacy.businessConsequence, confidence: legacy.confidence, significance: legacy.outreachValue === "high" ? "high" : "medium" };
+    if (legacy) {
+      selectedFinding = {
+        id: 1,
+        category: "legacy_problem",
+        title: legacy.title,
+        evidence: legacy.evidence,
+        assetCapability: legacy.businessConsequence,
+        confidence: legacy.confidence,
+        significance: legacy.outreachValue === "high" ? "high" : "medium",
+      };
+    }
   }
   if (!selectedFinding) throw new Error("No evidence-backed outreach finding meets the configured safety threshold");
   if (selectedFinding.confidence < minFindingConfidence) throw new Error("Selected outreach finding is below the configured confidence threshold");
-  if (containsUnsupportedFormAbsenceClaim(`${selectedFinding.title} ${selectedFinding.evidence} ${selectedFinding.assetCapability}`)) throw new Error("Selected outreach finding contains an unsupported form-absence claim");
-  if (containsUnverifiedVisitorVisibility(`${selectedFinding.title} ${selectedFinding.evidence} ${selectedFinding.assetCapability}`)) throw new Error("Selected outreach finding still requires visitor-facing verification");
+  const findingText = `${selectedFinding.title} ${selectedFinding.evidence} ${selectedFinding.assetCapability}`;
+  if (containsUnsupportedFormAbsenceClaim(findingText)) throw new Error("Selected outreach finding contains an unsupported form-absence claim");
+  if (containsUnverifiedVisitorVisibility(findingText)) throw new Error("Selected outreach finding still requires visitor-facing verification");
 
-  const env = getEnv();
-  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const senderName = input.senderName?.trim() || "Brian Woodson";
   const senderEmail = input.senderEmail?.trim() || "leads@brianwoodson.dev";
   const senderFirstName = senderName.split(/\s+/)[0] || senderName;
-  const observation = sanitizeProspectFacingEvidence(input.primaryOutreachAngle)
-    ?? sanitizeProspectFacingEvidence(selectedFinding.title)
-    ?? selectedFinding.title;
+  const strategy: OutreachStrategy = input.strategy ?? {
+    observation: sanitizeProspectFacingEvidence(input.primaryOutreachAngle) ?? sanitizeProspectFacingEvidence(selectedFinding.title) ?? selectedFinding.title,
+    ownerStake: sanitizeProspectFacingEvidence(selectedFinding.assetCapability) ?? "The issue may make it harder for someone to understand the business or take the next step.",
+    buyerMoment: null,
+    psychologicalLever: "self_interest",
+  };
+  const recentCtas = (input.recentCtas ?? []).slice(0, 20);
   const packet = {
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     businessType: input.keyword,
     qualificationDecision: input.qualificationDecision ?? null,
-    observation,
+    strategy,
+    recentCtas,
     sender: {
       name: senderName,
       firstName: senderFirstName,
@@ -207,59 +366,35 @@ export async function generateOutreachDraft(input: {
   };
 
   const strategyGuidance = editableInstructions.trim()
-    ? `Campaign strategy preferences follow. Treat them as goals, not as a checklist, outline, or wording template:\n${editableInstructions.trim()}\n\n`
+    ? `Campaign preferences follow. Use them only when they fit the private strategy; they are not an outline or wording template:\n${editableInstructions.trim()}\n\n`
     : "";
-  const systemInstructions = `${strategyGuidance}Non-editable writing and safety rules:\n${HARD_OUTREACH_RULES}`;
-  const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
-        { role: "user", content: [{ type: "input_text", text: `Write the first cold email from these private notes. Do not copy the note wording; write the email from scratch:\n${JSON.stringify(packet)}` }] },
-      ],
-      text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
-    }),
-  }, "OpenAI outreach");
-  if (!response.ok) throw new Error(`OpenAI outreach failed (${response.status}): ${await response.text()}`);
-  const data = await response.json() as any;
-  const raw = data.output_text ?? data.output?.flatMap((o: any) => o.content ?? []).find((c: any) => c.type === "output_text")?.text;
-  if (!raw) throw new Error("OpenAI returned no outreach draft");
-  const parsedDraft = OutreachDraftSchema.parse(JSON.parse(raw));
-  const draft: OutreachDraft = { ...parsedDraft, bodyText: normalizeOutreachBody(parsedDraft.bodyText) };
-  if (!hasNeutralGreeting(draft.bodyText)) {
-    throw new Error("OpenAI outreach draft omitted the required neutral greeting");
+  const systemInstructions = `${strategyGuidance}Non-editable Touch 1 writing and safety rules:\n${HARD_OUTREACH_RULES}`;
+
+  const first = await requestDraft(model, systemInstructions, packet);
+  first.draft.angle = strategy.observation;
+  let issues = draftValidationIssues(first.draft, senderName, recentCtas);
+  if (!issues.length) {
+    return {
+      draft: first.draft,
+      model: first.model,
+      attempts: 1,
+      inputTokens: first.inputTokens,
+      cachedTokens: first.cachedTokens,
+      outputTokens: first.outputTokens,
+    };
   }
-  if (hasUnverifiedSalutation(draft.bodyText)) {
-    throw new Error("OpenAI outreach draft fabricated or used an unverified recipient salutation");
-  }
-  if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.angle}\n${draft.cta}`)) {
-    throw new Error("OpenAI outreach draft contained placeholder text or a fabricated placeholder identity");
-  }
-  if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) {
-    throw new Error("OpenAI outreach draft used a generic filler opening instead of the selected evidence-backed observation");
-  }
-  if (!containsSenderIdentity(draft.bodyText, senderName)) {
-    throw new Error("OpenAI outreach draft omitted natural sender context");
-  }
-  if (containsMinimizingRemediation(draft.bodyText)) {
-    throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
-  }
-  if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) {
-    throw new Error("OpenAI outreach draft used internal consultant jargon instead of owner-facing business language");
-  }
-  if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) {
-    throw new Error("OpenAI outreach draft sounded like analyst or campaign language instead of a natural email");
-  }
-  if (ctaNeedsRegeneration(draft.cta)) {
-    throw new Error("OpenAI outreach draft produced a malformed, meta, or formulaic CTA");
-  }
+
+  const second = await requestDraft(model, systemInstructions, packet, { previousDraft: first.draft, issues });
+  second.draft.angle = strategy.observation;
+  issues = draftValidationIssues(second.draft, senderName, recentCtas);
+  if (issues.length) throw new Error(`OpenAI outreach draft failed quality checks after rewrite: ${issues.join(" ")}`);
+
   return {
-    draft,
-    model: data.model ?? model,
-    inputTokens: data.usage?.input_tokens,
-    cachedTokens: data.usage?.input_tokens_details?.cached_tokens,
-    outputTokens: data.usage?.output_tokens,
+    draft: second.draft,
+    model: second.model,
+    attempts: 2,
+    inputTokens: first.inputTokens + second.inputTokens,
+    cachedTokens: first.cachedTokens + second.cachedTokens,
+    outputTokens: first.outputTokens + second.outputTokens,
   };
 }
