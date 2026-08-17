@@ -1,12 +1,47 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getAppSettings } from "./settings.js";
 import { prepareLeadForOutreach } from "./outreach-preparation.js";
+import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
+
+async function cancelUnsafeInitialDrafts(prisma: PrismaClient, limit: number) {
+  const messages = await prisma.outreachMessage.findMany({
+    where: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved"] } },
+    orderBy: { generatedAt: "asc" },
+    take: Math.max(20, Math.min(limit * 2, 200)),
+    select: { id: true, leadId: true, subject: true, bodyText: true, status: true },
+  });
+  let cancelled = 0;
+  for (const message of messages) {
+    if (!outreachDraftNeedsRegeneration(message.bodyText, message.subject)) continue;
+    await prisma.$transaction(async (tx) => {
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: {
+          status: "cancelled",
+          requiresReview: true,
+          sendError: "Cancelled by outreach quality guard: placeholder, unverified salutation, generic opening, or minimizing remediation",
+        },
+      });
+      await tx.activity.create({
+        data: {
+          leadId: message.leadId,
+          type: "outreach_draft_invalidated",
+          summary: "Cancelled an unsent outreach draft that failed recipient/opening quality checks",
+          metadata: { messageId: message.id, previousStatus: message.status },
+        },
+      });
+    });
+    cancelled += 1;
+  }
+  return cancelled;
+}
 
 export async function processQualifiedOutreachPreparation(prisma: PrismaClient, limit = 10) {
   const settings = await getAppSettings(prisma);
   if (!settings.autoPrioritize) return [];
   const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
+  await cancelUnsafeInitialDrafts(prisma, safeLimit);
   const leads = await prisma.lead.findMany({
     where: {
       email: { not: null },
