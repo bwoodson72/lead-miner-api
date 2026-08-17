@@ -25,7 +25,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v14";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v15";
 
 function schema() {
   return {
@@ -43,9 +43,27 @@ function schema() {
   };
 }
 
+const SPELLED_NUMBER = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)";
+const EXACT_DURATION_RE = new RegExp(`\\b(?:\\d+(?:\\.\\d+)?|${SPELLED_NUMBER})\\s*(?:milliseconds?|ms|seconds?|secs?)\\b`, "i");
+
+export function containsProspectFacingPerformanceMeasurement(value: string) {
+  if (EXACT_DURATION_RE.test(value)) return true;
+  return /\b(?:load(?:ing)?|page|homepage|content|respond|response|delay|performance|speed)\b[^.!?\n]{0,70}\b\d+(?:\.\d+)?\s*%\b/i.test(value);
+}
+
+function sanitizePerformanceMeasurements(value: string | null): string | null {
+  if (!value) return value;
+  const duration = new RegExp(`\\b(?:\\d+(?:\\.\\d+)?|${SPELLED_NUMBER})\\s*(?:milliseconds?|ms|seconds?|secs?)\\b`, "gi");
+  return value
+    .replace(duration, "a noticeable amount of time")
+    .replace(/\b(?:performance|speed|load(?:ing)?)\s+(?:score|rating)?\s*(?:of|at|:)\s*\d+(?:\.\d+)?%?/gi, "measured site performance")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function sanitizeProspectFacingEvidence(value: string | null): string | null {
   if (!value) return value;
-  return value
+  return sanitizePerformanceMeasurements(value
     .replace(/\s*\[Sources:[^\]]+\]/gi, "")
     .replace(/\bLighthouse\b/gi, "site performance testing")
     .replace(/\bPageSpeed(?: Insights)?\b/gi, "site performance testing")
@@ -58,7 +76,7 @@ export function sanitizeProspectFacingEvidence(value: string | null): string | n
     .replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?)\b/gi, "a noticeable delay")
     .replace(/\b\d+(?:\.\d+)?\s*(?:s|seconds?)\b/gi, "a long time")
     .replace(/\s{2,}/g, " ")
-    .trim();
+    .trim());
 }
 
 export function containsMinimizingRemediation(value: string) {
@@ -84,7 +102,7 @@ export function ctaNeedsRegeneration(value: string) {
   if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
   if (/\b(?:consultation|meeting|schedule|calendar|book|15 minutes|10 minutes|20 minutes|quick call|brief call|conversation)\b/i.test(cta)) return true;
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
-  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta)) return true;
+  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta)) return true;
   return false;
 }
 
@@ -114,6 +132,7 @@ export function subjectNeedsRegeneration(value: string) {
   if (subject.split(/\s+/).length > 9) return true;
   if (/\b(?:free audit|website audit|urgent|act now|limited time|quick question|proposal|opportunity)\b/i.test(subject)) return true;
   if (/[!]{1,}/.test(subject)) return true;
+  if (containsProspectFacingPerformanceMeasurement(subject)) return true;
   return false;
 }
 
@@ -142,7 +161,7 @@ export function containsSenderIdentity(value: string, senderName: string) {
   const normalized = value.toLowerCase().replace(/\s+/g, " ");
   const normalizedSender = senderName.trim().replace(/\s+/g, " ").toLowerCase();
   if (normalizedSender && normalized.includes(normalizedSender)) return true;
-  return /\bi(?:'m| am)\s+(?:a\s+)?web developer\b|\bi\s+(?:build|design|develop|work on)\s+[^.!?\n]{0,55}\b(?:websites?|sites?)\b|\bi\s+work with\s+service businesses\b|\bi\s+help\s+service businesses\s+[^.!?\n]{0,55}\b(?:websites?|sites?)\b/i.test(value);
+  return /\bi(?:'m| am)\s+(?:a\s+)?(?:web developer|website developer)\b|\bi\s+(?:build|design|develop|work on|spend[^.!?\n]{0,35}building)\s+[^.!?\n]{0,65}\b(?:websites?|sites?)\b|\bi\s+work (?:in|on|with)\s+[^.!?\n]{0,55}\b(?:web development|websites?|sites?|service businesses)\b|\bi\s+help\s+service businesses\s+[^.!?\n]{0,55}\b(?:websites?|sites?)\b|\bmy work\s+(?:is|includes|involves)\s+[^.!?\n]{0,55}\b(?:websites?|web development)\b/i.test(value);
 }
 
 export function normalizeOutreachBody(value: string) {
@@ -179,11 +198,12 @@ function draftValidationIssues(draft: OutreachDraft, senderName: string, recentC
   if (hasUnverifiedSalutation(draft.bodyText)) issues.push("Do not invent a recipient name, owner name, or team greeting.");
   if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove placeholder or fabricated identity text.");
   if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) issues.push("Open with the specific observation, not generic cold-email filler.");
-  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push("Briefly establish that the sender builds websites for service businesses.");
+  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push("Give brief natural context that the sender works on websites or web development for service businesses; do not force a canned bio sentence.");
   if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
   if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
   if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
   if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
+  if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Do not put exact performance measurements in prospect-facing copy. Describe the delay or responsiveness qualitatively instead.");
   if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, or booking in Touch 1.");
   if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
   if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
@@ -203,6 +223,7 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || containsConsultantJargon(bodyText)
     || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
     || containsTechnicalAuditLanguage(`${subject}\n${bodyText}\n${cta}`)
+    || containsProspectFacingPerformanceMeasurement(`${subject}\n${bodyText}\n${cta}`)
     || (subject ? subjectNeedsRegeneration(subject) : false)
     || (cta ? ctaNeedsRegeneration(cta) : false);
 }
@@ -216,10 +237,11 @@ const HARD_OUTREACH_RULES = [
   "Write in ordinary spoken English. Contractions and simple phrases are welcome. Prefer words a service-business owner would use over analyst or consultant terminology.",
   "Do not copy or lightly paraphrase the private notes. Write the email from scratch as if the sender personally noticed the issue.",
   "Never invent metrics, traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
-  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, milliseconds, crawlers, evidence sources, Lead Miner, or AI research.",
+  "Exact performance measurements are private evidence, not prospect copy. Do not mention numeric or spelled-out load times, milliseconds, seconds, percentages, scores, or benchmark values; describe the observable delay or sluggishness qualitatively.",
+  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, crawlers, evidence sources, Lead Miner, or AI research.",
   "Do not explain implementation details, diagnose the whole website, prescribe a repair checklist, or sell the project.",
   "Start bodyText exactly with Hi, on its own line followed by a blank line. Do not invent a recipient name or team name.",
-  "Briefly establish why the sender notices this kind of thing: the sender builds custom websites for service businesses. Work that into the email naturally; do not write a biography paragraph.",
+  "Give enough context somewhere in the email that it is clear the sender works on websites or web development for service businesses. Use whatever short wording fits the email; do not force the same I build custom websites sentence into every message and do not write a biography paragraph.",
   "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language.",
   "The cta field must exactly match that final question in bodyText.",
   "Sign off with the sender's first name on its own line. No signature block.",
@@ -348,19 +370,25 @@ export async function generateOutreachDraft(input: {
     buyerMoment: null,
     psychologicalLever: "self_interest",
   };
+  const writerStrategy: OutreachStrategy = {
+    observation: sanitizePerformanceMeasurements(strategy.observation) ?? strategy.observation,
+    ownerStake: sanitizePerformanceMeasurements(strategy.ownerStake) ?? strategy.ownerStake,
+    buyerMoment: sanitizePerformanceMeasurements(strategy.buyerMoment),
+    psychologicalLever: strategy.psychologicalLever,
+  };
   const recentCtas = (input.recentCtas ?? []).slice(0, 20);
   const packet = {
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     businessType: input.keyword,
     qualificationDecision: input.qualificationDecision ?? null,
-    strategy,
+    strategy: writerStrategy,
     recentCtas,
     sender: {
       name: senderName,
       firstName: senderFirstName,
       role: "web developer",
-      work: "builds custom websites for service businesses",
+      work: "works on custom websites for service businesses",
       email: senderEmail,
     },
   };
