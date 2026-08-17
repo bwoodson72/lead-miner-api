@@ -158,8 +158,8 @@ export async function generateOutreachDraft(input: {
   businessName: string | null;
   domain: string;
   keyword: string;
-  senderName: string;
-  senderEmail: string;
+  senderName?: string;
+  senderEmail?: string;
   primaryOutreachAngle: string | null;
   researchSummary: string | null;
   qualificationReason: string | null;
@@ -182,13 +182,15 @@ export async function generateOutreachDraft(input: {
 
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
+  const senderName = input.senderName?.trim() || "Brian Woodson";
+  const senderEmail = input.senderEmail?.trim() || "leads@brianwoodson.dev";
   const packet = {
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     keyword: input.keyword,
     senderIdentity: {
-      name: input.senderName,
-      email: input.senderEmail,
+      name: senderName,
+      email: senderEmail,
       role: "web developer",
       serviceFocus: "builds custom websites for service businesses",
     },
@@ -247,7 +249,7 @@ export async function generateOutreachDraft(input: {
   if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) {
     throw new Error("OpenAI outreach draft used a generic filler opening instead of the selected evidence-backed observation");
   }
-  if (!containsSenderIdentity(draft.bodyText, input.senderName)) {
+  if (!containsSenderIdentity(draft.bodyText, senderName)) {
     throw new Error("OpenAI outreach draft omitted the configured sender identity");
   }
   if (containsMinimizingRemediation(draft.bodyText)) {
