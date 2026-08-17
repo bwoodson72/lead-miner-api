@@ -13,7 +13,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v9";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v10";
 
 function schema() {
   return {
@@ -79,15 +79,30 @@ export function containsPlaceholderText(value: string) {
   return /\[(?:[^\]]{0,30}(?:name|company|business|email|phone)[^\]]{0,30})\]|\{(?:[^}]{0,30}(?:name|company|business|email|phone)[^}]{0,30})\}|<(?:[^>]{0,30}(?:name|company|business|email|phone)[^>]{0,30})>|\b(?:acme roofing|example company|sample company|your company|company name|business name|placeholder|tbd)\b/i.test(value);
 }
 
+export function hasNeutralGreeting(value: string) {
+  return /^\s*Hi,\s*(?:\r?\n|$)/i.test(value);
+}
+
 export function hasUnverifiedSalutation(value: string) {
-  return /^\s*(?:hi|hello|hey|dear)\b[^\r\n]{0,140}(?:,|!|\r?\n)/i.test(value);
+  const match = value.match(/^\s*(?:hi|hello|hey|dear)\b([^\r\n]*)(?:\r?\n|$)/i);
+  if (!match) return false;
+  const remainder = match[1].trim();
+  return remainder !== "" && remainder !== ",";
+}
+
+export function containsSenderIdentity(value: string, senderName: string) {
+  const normalizedSender = senderName.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalizedSender) return false;
+  return value.toLowerCase().replace(/\s+/g, " ").includes(normalizedSender);
 }
 
 export function normalizeOutreachBody(value: string) {
+  return value.trim();
+}
+
+function stripNeutralGreeting(value: string) {
   return value
-    .trim()
-    .replace(/^\s*(?:hi|hello|hey|dear)(?:\s+[^,\r\n]{0,140})?\s*,\s*(?:\r?\n\s*)*/i, "")
-    .replace(/^\s*(?:hi|hello|hey)\s*!\s*(?:\r?\n\s*)*/i, "")
+    .replace(/^\s*Hi,\s*(?:\r?\n\s*)+/i, "")
     .trim();
 }
 
@@ -96,16 +111,17 @@ export function containsGenericOpening(value: string) {
 }
 
 export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", cta = "") {
-  return hasUnverifiedSalutation(bodyText)
+  return !hasNeutralGreeting(bodyText)
+    || hasUnverifiedSalutation(bodyText)
     || containsPlaceholderText(`${subject}\n${bodyText}`)
-    || containsGenericOpening(normalizeOutreachBody(bodyText))
+    || containsGenericOpening(stripNeutralGreeting(normalizeOutreachBody(bodyText)))
     || containsMinimizingRemediation(bodyText)
     || containsConsultantJargon(bodyText)
     || (cta ? ctaNeedsRegeneration(cta) : false);
 }
 
 const HARD_OUTREACH_RULES = [
-  "Write Touch 1 as concise evidence-backed direct-response outreach: one concrete observation, one plausible business consequence, why that consequence matters to the owner, and one low-friction question.",
+  "Write Touch 1 as concise evidence-backed direct-response outreach: a neutral greeting, one concrete observation, one plausible business consequence, why that consequence matters to the owner, one brief sender-context sentence, and one low-friction question.",
   "Write the first cold email from exactly one selected, evidence-backed material finding as the concrete hook.",
   "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
   "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied.",
@@ -122,13 +138,16 @@ const HARD_OUTREACH_RULES = [
   "If qualificationDecision is rebuild_candidate, treat the selected finding as one concrete symptom of the broader asset-level weakness already established by research. Do not imply that a tiny standalone edit resolves the opportunity. Frame the unresolved question around whether continuing to patch the current website makes sense versus replacing it with a stronger business asset.",
   "If qualificationDecision is optimization_candidate, focus on the meaningful limitation and the business consequence of leaving it unresolved. Treat the existing website as fundamentally viable and do not exaggerate the issue into a rebuild case.",
   "Do not pitch a trivial content-maintenance service. If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
-  "No verified contact-person name is supplied in this drafting packet. Therefore do not write any salutation or greeting. Never write Hi/Hello/Hey/Dear followed by a business name, company name, team, there, owner, or other invented recipient. Start immediately with the specific evidence-backed observation.",
+  "No verified contact-person name is supplied. Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. Do not add a recipient name, business name, team, owner, 'there', or any other invented personalization to the greeting.",
+  "After the greeting, the first substantive sentence must contain a concrete observation tied to the selected finding. Do not open the substance with filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, I found your website, or My name is.",
+  "After establishing the prospect's problem and consequence, include exactly one short sender-context sentence using only senderIdentity. Identify the sender by full name and naturally explain that the sender is a web developer who builds custom websites for service businesses. Keep this sentence brief; do not lead with it, list credentials, brag, or turn the email into a bio.",
+  "Use the sender context to answer the implicit question 'who is this and why are they emailing me?' without taking attention away from the prospect's business problem.",
+  "After the CTA, sign off with the sender's first name on its own line. Do not add a long signature block to bodyText.",
   "Never emit placeholder text or placeholder identities such as [Name], {First Name}, <Company>, Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD.",
-  "The first sentence must contain a concrete observation tied to the selected finding. Do not open with filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, I found your website, or My name is.",
-  "Keep the email concise, specific, and natural. Prefer roughly 80 to 150 words unless the evidence genuinely requires less.",
+  "Keep the email concise, specific, and natural. Prefer roughly 90 to 160 words including the greeting, sender-context sentence, CTA, and sign-off.",
   "Do not use fake familiarity, generic compliments, placeholders, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
   "Use one CTA, and make the cta field the exact prospect-facing question used in the email. It must be a complete question, not an instruction to the writer and not a fragment.",
-  "The CTA should continue the unresolved business question rather than defaulting to generic website-service language. Good CTAs ask whether it is worth looking at what prospects see, whether the issue may be getting in the way of inquiries, or whether the owner wants to understand the risk. A consultation can be implied or explicitly offered, but do not default to formulas such as 'brief consultation about improving the site.'",
+  "The CTA should continue the unresolved business question rather than defaulting to generic website-service language. Vary the wording naturally. A consultation can be implied or explicitly offered, but do not default to formulas such as 'brief consultation about improving the site.'",
   "Return only the required structured draft.",
 ].join(" ");
 
@@ -139,6 +158,8 @@ export async function generateOutreachDraft(input: {
   businessName: string | null;
   domain: string;
   keyword: string;
+  senderName: string;
+  senderEmail: string;
   primaryOutreachAngle: string | null;
   researchSummary: string | null;
   qualificationReason: string | null;
@@ -165,10 +186,17 @@ export async function generateOutreachDraft(input: {
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     keyword: input.keyword,
+    senderIdentity: {
+      name: input.senderName,
+      email: input.senderEmail,
+      role: "web developer",
+      serviceFocus: "builds custom websites for service businesses",
+    },
     recipientPolicy: {
       verifiedPersonNameAvailable: false,
-      salutationAllowed: false,
-      openingRequirement: "Start directly with the specific evidence-backed observation; do not greet the business or a fabricated team.",
+      salutationAllowed: true,
+      requiredGreeting: "Hi,",
+      openingRequirement: "After the neutral greeting, start directly with the specific evidence-backed observation; do not fabricate a recipient identity.",
     },
     qualificationContext: {
       decision: input.qualificationDecision ?? null,
@@ -207,11 +235,20 @@ export async function generateOutreachDraft(input: {
   if (!raw) throw new Error("OpenAI returned no outreach draft");
   const parsedDraft = OutreachDraftSchema.parse(JSON.parse(raw));
   const draft: OutreachDraft = { ...parsedDraft, bodyText: normalizeOutreachBody(parsedDraft.bodyText) };
+  if (!hasNeutralGreeting(draft.bodyText)) {
+    throw new Error("OpenAI outreach draft omitted the required neutral greeting");
+  }
+  if (hasUnverifiedSalutation(draft.bodyText)) {
+    throw new Error("OpenAI outreach draft fabricated or used an unverified recipient salutation");
+  }
   if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.angle}\n${draft.cta}`)) {
     throw new Error("OpenAI outreach draft contained placeholder text or a fabricated placeholder identity");
   }
-  if (containsGenericOpening(draft.bodyText)) {
+  if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) {
     throw new Error("OpenAI outreach draft used a generic filler opening instead of the selected evidence-backed observation");
+  }
+  if (!containsSenderIdentity(draft.bodyText, input.senderName)) {
+    throw new Error("OpenAI outreach draft omitted the configured sender identity");
   }
   if (containsMinimizingRemediation(draft.bodyText)) {
     throw new Error("OpenAI outreach draft minimized or prescribed a trivial remediation instead of framing the qualified website opportunity");
