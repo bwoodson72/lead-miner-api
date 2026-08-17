@@ -16,7 +16,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v12";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v13";
 
 function schema() {
   return {
@@ -60,6 +60,10 @@ export function containsConsultantJargon(value: string) {
   return /\b(?:acquisition asset|material limitation|optimization engagement|conversion paths?|customer-acquisition asset)\b/i.test(value);
 }
 
+export function containsArtificialOutreachLanguage(value: string) {
+  return /\b(?:customer journey|visitor experience|prospective customers?|prospective clients?|high-intent visitors?|business proposition|primary content|initial presentation|initial usability|acquisition structure|acquisition path|first-visit friction|material constraint|meaningful optimization|page responsiveness)\b|\bfriction\b|\b(?:evaluate|engage) the business\b/i.test(value);
+}
+
 export function ctaNeedsRegeneration(value: string) {
   const cta = value.trim();
   if (!cta) return true;
@@ -68,6 +72,10 @@ export function ctaNeedsRegeneration(value: string) {
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
   if (/^would you be open to\b/i.test(cta)) return true;
   if (/^would it be (?:useful|worth)\b/i.test(cta)) return true;
+  if (/^could i (?:walk you through|show you)\b/i.test(cta)) return true;
+  if (/^could we look at\b/i.test(cta)) return true;
+  if (/^can i send (?:you )?(?:a )?brief assessment\b/i.test(cta)) return true;
+  if (containsArtificialOutreachLanguage(cta)) return true;
   return false;
 }
 
@@ -120,37 +128,27 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || containsGenericOpening(stripNeutralGreeting(normalizeOutreachBody(bodyText)))
     || containsMinimizingRemediation(bodyText)
     || containsConsultantJargon(bodyText)
+    || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
     || (cta ? ctaNeedsRegeneration(cta) : false);
 }
 
 const HARD_OUTREACH_RULES = [
-  "Write Touch 1 like a real one-to-one cold email from one businessperson to another. It must sound natural when read aloud, not like an audit summary, prompt checklist, or marketing template.",
-  "Build the email around exactly one selected, evidence-backed material finding. Make one clear persuasive point from that finding and stop once the point is made.",
-  "Use the supplied qualification decision and research context only to understand the scope of the opportunity. Do not introduce a second unsupported website problem.",
-  "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied.",
-  "Never state imagined visitor behavior as observed fact. Conditional business consequences are allowed when they follow directly from the selected finding.",
-  "Use direct-response psychology selectively. Self-interest, loss aversion, mental imagery, competitive risk, and curiosity are optional tools. Use only what naturally strengthens this particular email; do not visibly demonstrate or stack persuasion techniques.",
-  "If a hypothetical buying situation makes the consequence clearer, use at most one short scenario and frame it as a possibility. Otherwise state the consequence plainly.",
-  "Do not stack multiple consequence frames. Choose the single business consequence that best fits the finding and express it in ordinary language.",
-  "Prefer plain owner-facing language. Avoid analyst or consultant phrasing when simpler words would sound more natural.",
-  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, numeric audit scores, milliseconds, benchmark names, crawler failures, evidence sources, or internal Lead Miner terminology.",
-  "Translate technical evidence into ordinary business language without overstating it. Do not turn the email into a performance report.",
-  "Do not prescribe the implementation fix or give a DIY checklist. Explain enough of the problem to make a reply or conversation worthwhile.",
-  "Never minimize the opportunity with language such as simple cleanup, quick fix, easy change, small update, just change, simply replace, one primary phone, or one monitored email.",
-  "If qualificationDecision is rebuild_candidate, the selected finding may be one symptom of a broader website weakness. Do not imply that a tiny standalone edit resolves the opportunity, but do not force a rebuild pitch into Touch 1.",
-  "If qualificationDecision is optimization_candidate, treat the existing website as fundamentally viable. Focus on the meaningful limitation without exaggerating it into a rebuild case.",
-  "If the supplied context does not support a meaningful web-development engagement, set requiresReview true rather than manufacturing one.",
-  "Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. No verified contact-person name is supplied, so do not add a recipient name, business name, team, owner, 'there', or invented personalization to the greeting.",
-  "After the greeting, get to the specific observation quickly. Do not use filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, or I found your website.",
-  "Keep the problem and consequence compact. Usually one short paragraph or two brief paragraphs is enough before sender context.",
-  "Include brief sender context somewhere after the problem is established so the prospect understands that the sender is a web developer who works on custom websites for service businesses. Write this naturally in the flow of the email. It may be a sentence or clause. Do not use a fixed bio formula, do not list credentials, and do not make the email about the sender.",
-  "Use one low-friction CTA that follows naturally from the specific email. Do not copy a stock cold-email CTA and do not restate the entire argument in the question.",
-  "Do not begin the CTA with the recurring formulas 'Would you be open to', 'Would it be useful to', or 'Would it be worth'. Choose wording that sounds specific to the preceding email.",
-  "Make the cta field the exact prospect-facing question used in bodyText. It must be a complete question, not an instruction to the writer or a fragment.",
-  "After the CTA, sign off with the sender's first name on its own line. Do not add a long signature block to bodyText.",
-  "Never emit placeholder text or placeholder identities such as [Name], {First Name}, <Company>, Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD.",
-  "Keep the email concise. Prefer roughly 65 to 110 words including greeting, sender context, CTA, and sign-off. Shorter is better when the point is already clear.",
-  "Do not use fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
+  "Write a short cold email that sounds like one person typed it to another person. Use ordinary spoken English and short sentences.",
+  "The supplied observation is a factual note, not copy. Do not mirror its wording or turn it into an audit summary. Rewrite the idea from scratch in everyday language.",
+  "Make one point only: what you noticed and one plausible reason the owner may care. Stop there.",
+  "Do not use sales-analysis language such as friction, customer journey, visitor experience, prospective customer, high-intent visitor, acquisition, conversion path, material limitation, optimization engagement, responsiveness, primary content, or business proposition.",
+  "Do not sound like a consultant presenting findings. Avoid phrases about affecting the experience, evaluating the business, engaging with the site, or where a delay may be getting in the way.",
+  "Never invent metrics, traffic loss, revenue loss, ad spend, rankings, business plans, growth, or facts not supplied. Never state imagined behavior as something that definitely happened.",
+  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, scores, milliseconds, benchmark names, crawlers, evidence sources, or Lead Miner.",
+  "Do not explain implementation details or prescribe a repair checklist.",
+  "Start bodyText exactly with 'Hi,' on its own line, followed by a blank line. Do not invent a recipient name or team name.",
+  "After the greeting, say what you noticed in plain language. First person is fine. Do not use generic filler such as I hope you're well, I wanted to reach out, I'm reaching out, I came across your website, or I found your website.",
+  "Work sender context into the email naturally after the observation. The reader only needs to understand that the sender is a web developer who builds custom websites for service businesses. Do not write a standalone biography paragraph or list credentials.",
+  "End with one short, low-pressure question that asks for a reply, permission to send the details, or a conversation. Keep the question conversational and specific to the email. Do not use formal consultation language or recurring campaign formulas.",
+  "The cta field must exactly match the question used in bodyText and must end with a question mark.",
+  "Sign off with the sender's first name on its own line. No long signature block.",
+  "Keep the full email roughly 50 to 90 words including greeting, sender context, CTA, and sign-off.",
+  "No fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
   "Return only the required structured draft.",
 ].join(" ");
 
@@ -189,41 +187,29 @@ export async function generateOutreachDraft(input: {
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const senderName = input.senderName?.trim() || "Brian Woodson";
   const senderEmail = input.senderEmail?.trim() || "leads@brianwoodson.dev";
+  const senderFirstName = senderName.split(/\s+/)[0] || senderName;
+  const observation = sanitizeProspectFacingEvidence(input.primaryOutreachAngle)
+    ?? sanitizeProspectFacingEvidence(selectedFinding.title)
+    ?? selectedFinding.title;
   const packet = {
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
-    keyword: input.keyword,
-    senderIdentity: {
+    businessType: input.keyword,
+    qualificationDecision: input.qualificationDecision ?? null,
+    observation,
+    sender: {
       name: senderName,
-      email: senderEmail,
+      firstName: senderFirstName,
       role: "web developer",
-      serviceFocus: "builds custom websites for service businesses",
-    },
-    recipientPolicy: {
-      verifiedPersonNameAvailable: false,
-      salutationAllowed: true,
-      requiredGreeting: "Hi,",
-      openingRequirement: "After the neutral greeting, get quickly to the specific evidence-backed observation without fabricating a recipient identity.",
-    },
-    qualificationContext: {
-      decision: input.qualificationDecision ?? null,
-      assetStrength: input.assetStrength ?? null,
-      researchSummary: sanitizeProspectFacingEvidence(input.researchSummary),
-      decisionReason: sanitizeProspectFacingEvidence(input.qualificationReason),
-    },
-    selectedOutreachAngle: sanitizeProspectFacingEvidence(input.primaryOutreachAngle) ?? sanitizeProspectFacingEvidence(selectedFinding.title),
-    selectedFinding: {
-      id: selectedFinding.id,
-      category: selectedFinding.category,
-      title: sanitizeProspectFacingEvidence(selectedFinding.title),
-      evidence: sanitizeProspectFacingEvidence(selectedFinding.evidence),
-      businessImpact: sanitizeProspectFacingEvidence(selectedFinding.assetCapability),
-      confidence: selectedFinding.confidence,
-      significance: selectedFinding.significance,
+      work: "builds custom websites for service businesses",
+      email: senderEmail,
     },
   };
 
-  const systemInstructions = `${editableInstructions.trim()}\n\nNon-editable system rules:\n${HARD_OUTREACH_RULES}`;
+  const strategyGuidance = editableInstructions.trim()
+    ? `Campaign strategy preferences follow. Treat them as goals, not as a checklist, outline, or wording template:\n${editableInstructions.trim()}\n\n`
+    : "";
+  const systemInstructions = `${strategyGuidance}Non-editable writing and safety rules:\n${HARD_OUTREACH_RULES}`;
   const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -231,7 +217,7 @@ export async function generateOutreachDraft(input: {
       model,
       input: [
         { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
-        { role: "user", content: [{ type: "input_text", text: `Create the first outreach email from this qualified Lead Miner opportunity:\n${JSON.stringify(packet)}` }] },
+        { role: "user", content: [{ type: "input_text", text: `Write the first cold email from these private notes. Do not copy the note wording; write the email from scratch:\n${JSON.stringify(packet)}` }] },
       ],
       text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
     }),
@@ -262,6 +248,9 @@ export async function generateOutreachDraft(input: {
   }
   if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) {
     throw new Error("OpenAI outreach draft used internal consultant jargon instead of owner-facing business language");
+  }
+  if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) {
+    throw new Error("OpenAI outreach draft sounded like analyst or campaign language instead of a natural email");
   }
   if (ctaNeedsRegeneration(draft.cta)) {
     throw new Error("OpenAI outreach draft produced a malformed, meta, or formulaic CTA");
