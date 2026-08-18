@@ -1,7 +1,6 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { ensureInitialOutreachDraft, prioritizeLead, selectLeadOutreachAngle } from "./outreach-preparation.js";
-import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
-import { isCurrentOutreachPromptVersion, requiredOutreachPromptVersion } from "./outreach-version.js";
+import { isCurrentOutreachPromptVersion, outreachMessageNeedsRegeneration, requiredOutreachPromptVersion } from "./outreach-version.js";
 import { processLeadResearch } from "./research-routes.js";
 
 export type RegenerateUnsentScope = "all" | "initial" | "followup";
@@ -63,7 +62,7 @@ export async function regenerateUnsentOutreach(
     },
     orderBy: { generatedAt: "desc" },
     take: limit,
-    select: { id: true, leadId: true, kind: true, sequenceNumber: true, subject: true, bodyText: true, promptVersion: true, status: true },
+    select: { id: true, leadId: true, kind: true, sequenceNumber: true, subject: true, bodyText: true, cta: true, promptVersion: true, status: true },
   });
 
   const latestBySlot = new Map<string, (typeof messages)[number]>();
@@ -75,7 +74,7 @@ export async function regenerateUnsentOutreach(
   const candidates = [...latestBySlot.values()].filter((message) =>
     options.force
     || !isCurrentOutreachPromptVersion(message.kind, message.promptVersion)
-    || outreachDraftNeedsRegeneration(message.bodyText, message.subject),
+    || outreachMessageNeedsRegeneration(message.kind, message.bodyText, message.subject, message.cta ?? ""),
   );
 
   const results: Array<{ messageId: number; leadId: number; kind: string; success: boolean; replacementMessageId?: number; action?: string; error?: string }> = [];
