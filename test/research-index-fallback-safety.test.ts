@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCrawlerFailureSafety, type ResearchResult } from "../src/lib/ai-research.js";
+import { applyCrawlerFailureSafety, ResearchResultSchema, type ResearchResult } from "../src/lib/ai-research.js";
 import type { PerformanceAssessment } from "../src/lib/performance-assessment.js";
 
 function dimension(rating: "strong" | "adequate" | "constrained" | "weak" | "unknown", sources: any[]) {
@@ -21,9 +21,9 @@ const crownStyleResult: ResearchResult = {
   findings: [
     {
       category: "site_maturity",
-      title: "A rebuild-versus-optimization recommendation requires live validation",
+      title: "A rebuild recommendation requires live validation",
       evidence: "Direct inspection failed while search indexing shows a substantial site.",
-      assetCapability: "Validate the live homepage before deciding.",
+      assetCapability: "Validate the live homepage before deciding whether replacement is justified.",
       confidence: 0.65,
       significance: "medium",
       evidenceSources: ["site_coverage", "search_index"],
@@ -48,7 +48,7 @@ const crownStyleResult: ResearchResult = {
     },
   ],
   researchSummary: "The performance evidence is strong enough to justify a conversation about the visitor experience.",
-  decisionReason: "Live validation is needed before choosing rebuild versus optimization.",
+  decisionReason: "Live validation is needed before deciding whether a rebuild is justified.",
   confidence: 0.9,
 };
 
@@ -73,65 +73,39 @@ const severePerformance: PerformanceAssessment = {
   strongPerformanceSignal: true,
 };
 
-test("indexed fallback still downgrades an unsupported rebuild conclusion", () => {
+test("indexed fallback downgrades an unsupported rebuild to review rather than an optimization offer", () => {
   const safe = applyCrawlerFailureSafety(crownStyleResult, crownStyleWebsite, severePerformance);
-  assert.equal(safe.decision, "optimization_candidate");
-  assert.equal(safe.assetStrength, "constrained");
+  assert.equal(safe.decision, "needs_review");
+  assert.equal(safe.assetStrength, "unknown");
   assert.equal(safe.confidence, 0.65);
-  assert.match(safe.decisionReason, /index evidence alone is not strong enough to support a rebuild conclusion/i);
+  assert.match(safe.decisionReason, /do not establish enough current website evidence to justify a custom rebuild/i);
+  assert.match(safe.decisionReason, /optimization is outside the service/i);
 });
 
-test("severe performance no longer forces every fallback lead to optimization", () => {
+test("severe performance alone does not turn a fallback lead into a service opportunity", () => {
   const safe = applyCrawlerFailureSafety({
     ...crownStyleResult,
     decision: "no_material_opportunity",
     assetStrength: "adequate",
     findings: [],
-    decisionReason: "The supplied evidence does not establish a material development opportunity.",
+    decisionReason: "The supplied evidence does not establish a custom rebuild opportunity.",
   }, crownStyleWebsite, severePerformance);
   assert.equal(safe.decision, "no_material_opportunity");
   assert.equal(safe.assetStrength, "adequate");
 });
 
-test("direct multi-dimensional weak asset can be recalibrated from optimization to rebuild", () => {
-  const result: ResearchResult = {
+test("optimization is not a valid current research decision", () => {
+  const parsed = ResearchResultSchema.safeParse({
     ...crownStyleResult,
     decision: "optimization_candidate",
-    assetStrength: "weak",
-    dimensions: {
-      performanceEffectiveness: dimension("weak", ["performance"]),
-      demandAlignment: dimension("adequate", ["representative_page"]),
-      businessRepresentation: dimension("weak", ["representative_page"]),
-      customerActionCapability: dimension("constrained", ["contact_signal", "representative_page"]),
-      acquisitionReadiness: dimension("weak", ["performance", "cta"]),
-      siteMaturity: dimension("adequate", ["architecture", "representative_page"]),
-    },
-    findings: [
-      {
-        category: "performance",
-        title: "Severely slow rendering",
-        evidence: "Direct performance measurements are poor.",
-        assetCapability: "The site is materially constrained as an acquisition asset.",
-        confidence: 0.98,
-        significance: "high",
-        evidenceSources: ["performance"],
-      },
-      {
-        category: "business_representation",
-        title: "Core service representation is materially weak",
-        evidence: "Directly inspected pages provide thin and inconsistent service explanation.",
-        assetCapability: "The site does not represent the business strongly enough for a high-consideration service.",
-        confidence: 0.9,
-        significance: "medium",
-        evidenceSources: ["representative_page"],
-      },
-    ],
-    confidence: 0.9,
-  };
+  });
+  assert.equal(parsed.success, false);
+});
+
+test("direct rebuild decision is preserved when direct evidence supports it", () => {
   const website = { finalUrl: "https://example.com/", fetchError: null } as any;
-  const safe = applyCrawlerFailureSafety(result, website, severePerformance);
+  const safe = applyCrawlerFailureSafety(crownStyleResult, website, severePerformance);
   assert.equal(safe.decision, "rebuild_candidate");
-  assert.match(safe.decisionReason, /multiple material limitations across distinct business-asset dimensions/i);
 });
 
 test("current provider plus index plus independent material limitations can preserve rebuild", () => {
@@ -168,7 +142,7 @@ test("crawler uncertainty is not stored as a material finding", () => {
 });
 
 test("research narratives remove outreach-style conversation language", () => {
-  const safe = applyCrawlerFailureSafety({ ...crownStyleResult, decision: "optimization_candidate" }, crownStyleWebsite, severePerformance);
+  const safe = applyCrawlerFailureSafety(crownStyleResult, crownStyleWebsite, severePerformance);
   assert.doesNotMatch(safe.researchSummary, /conversation/i);
   assert.match(safe.researchSummary, /support further evaluation/i);
 });
