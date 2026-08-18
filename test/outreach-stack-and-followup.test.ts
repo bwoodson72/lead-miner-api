@@ -12,8 +12,8 @@ import {
 } from "../src/lib/ai-followup.js";
 
 test("outreach and follow-up prompt versions reflect stack-free sequence rules", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v17");
-  assert.equal(FOLLOWUP_PROMPT_VERSION, "followup-v4");
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v18");
+  assert.equal(FOLLOWUP_PROMPT_VERSION, "followup-v5");
 });
 
 test("implementation details are blocked from prospect-facing copy", () => {
@@ -32,8 +32,10 @@ test("Touch 1 drafts with stack language require regeneration", () => {
   assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Want me to send over what I found?"), true);
 });
 
-test("follow-up safety does not require a new greeting but still blocks stack language", () => {
+test("follow-up safety does not require a new greeting and allows grounded human timing", () => {
   assert.equal(followUpNeedsRegeneration("One reason I mentioned it is that the next step changes from page to page. Happy to send the notes if useful.\n\nBrian"), false);
+  assert.equal(followUpNeedsRegeneration("That close-to-a-minute wait is a long time when someone is comparing roofers.\n\nBrian"), false);
+  assert.equal(followUpNeedsRegeneration("The LCP measured 58,400 ms.\n\nBrian"), true);
   assert.equal(followUpNeedsRegeneration("I would rebuild the site in Next.js.\n\nBrian"), true);
 });
 
