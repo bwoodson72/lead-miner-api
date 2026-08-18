@@ -27,7 +27,7 @@ async function invalidateUnsentInitialOutreach(prisma: PrismaClient, leadId: num
 }
 
 function lifecycleStatusForDecision(decision: string, currentStatus: string) {
-  if (decision === "rebuild_candidate" || decision === "optimization_candidate") return "qualified";
+  if (decision === "rebuild_candidate") return "qualified";
   if (decision === "no_material_opportunity") return "disqualified";
   return currentStatus;
 }
