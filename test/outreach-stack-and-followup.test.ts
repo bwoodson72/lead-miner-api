@@ -18,10 +18,13 @@ test("outreach and follow-up prompt versions reflect stack-free sequence rules",
 
 test("implementation details are blocked from prospect-facing copy", () => {
   assert.equal(containsProspectFacingImplementationStack("I build websites with Astro."), true);
+  assert.equal(containsProspectFacingImplementationStack("The site would be built with Astro."), true);
   assert.equal(containsProspectFacingImplementationStack("Your WordPress site has several service pages."), true);
   assert.equal(containsProspectFacingImplementationStack("I would rebuild it in Next.js."), true);
   assert.equal(containsProspectFacingImplementationStack("I build custom-coded websites for service businesses."), true);
   assert.equal(containsProspectFacingImplementationStack("I build custom websites for service businesses."), false);
+  assert.equal(containsProspectFacingImplementationStack("Someone may try the next company."), false);
+  assert.equal(containsProspectFacingImplementationStack("The next step should be clear."), false);
 });
 
 test("Touch 1 drafts with stack language require regeneration", () => {
