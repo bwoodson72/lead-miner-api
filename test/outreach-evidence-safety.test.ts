@@ -22,8 +22,8 @@ import {
   subjectNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v16", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v16");
+test("outreach prompt version is v17", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v17");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
