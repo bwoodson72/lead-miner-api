@@ -8,43 +8,346 @@ datasource db {
 }
 
 model Lead {
-  id               Int       @id @default(autoincrement())
-  domain           String    @unique
-  businessName     String?   @map("business_name")
-  landingPageUrl   String    @map("landing_page_url")
-  keyword          String
-  adSource         String    @default("local_organic") @map("ad_source")
-
-  lighthouseScore  Int       @map("lighthouse_score")
-  lcp              Int
-  cls              Float?
-  tbt              Int?
-
-  email            String?
-  phone            String?
-  address          String?
-  contactPageUrl   String?   @map("contact_page_url")
-  enrichmentStatus String?   @map("enrichment_status")
-  enrichmentNotes  String?   @map("enrichment_notes")
-  isAgencyManaged  Boolean   @default(false) @map("is_agency_managed")
-  agencyName       String?   @map("agency_name")
-  isNationalChain  Boolean   @default(false) @map("is_national_chain")
-  chainReason      String?   @map("chain_reason")
-  followUpDate     DateTime? @map("follow_up_date")
-
-  status           String    @default("new")
-  outreachCount    Int       @default(0) @map("outreach_count")
+  id Int @id @default(autoincrement())
+  domain String @unique
+  normalizedDomain String? @unique @map("normalized_domain")
+  businessName String? @map("business_name")
+  landingPageUrl String @map("landing_page_url")
+  keyword String
+  category String?
+  city String?
+  region String?
+  adSource String @default("local_organic") @map("ad_source")
+  lighthouseScore Int @map("lighthouse_score")
+  lcp Int
+  cls Float?
+  tbt Int?
+  email String?
+  phone String?
+  address String?
+  contactPageUrl String? @map("contact_page_url")
+  enrichmentStatus String? @map("enrichment_status")
+  enrichmentNotes String? @map("enrichment_notes")
+  emailEnrichmentStatus String @default("pending") @map("email_enrichment_status")
+  emailEnrichmentAttempts Int @default(0) @map("email_enrichment_attempts")
+  lastEmailEnrichmentAt DateTime? @map("last_email_enrichment_at")
+  nextEmailEnrichmentAt DateTime? @map("next_email_enrichment_at")
+  emailEnrichmentReason String? @map("email_enrichment_reason")
+  isAgencyManaged Boolean @default(false) @map("is_agency_managed")
+  agencyName String? @map("agency_name")
+  isNationalChain Boolean @default(false) @map("is_national_chain")
+  chainReason String? @map("chain_reason")
+  status String @default("new")
+  qualificationDecision String? @map("qualification_decision")
+  qualificationReason String? @map("qualification_reason")
+  priorityScore Int? @map("priority_score")
+  priorityBreakdown Json? @map("priority_breakdown")
+  primaryOutreachAngle String? @map("primary_outreach_angle")
+  primaryOutreachAngleReason String? @map("primary_outreach_angle_reason") @db.Text
+  primaryOutreachAngleConfidence Float? @map("primary_outreach_angle_confidence")
+  primaryOutreachFindingId Int? @map("primary_outreach_finding_id")
+  outreachPreparedAt DateTime? @map("outreach_prepared_at")
+  researchSummary String? @map("research_summary")
+  researchVersion String? @map("research_version")
+  lastResearchedAt DateTime? @map("last_researched_at")
+  assetStrength String? @map("asset_strength")
+  assetAssessment Json? @map("asset_assessment")
+  replyStatus String? @map("reply_status")
+  replySummary String? @map("reply_summary")
+  lastReplyAt DateTime? @map("last_reply_at")
+  replyHandledAt DateTime? @map("reply_handled_at")
+  revisitAt DateTime? @map("revisit_at")
+  outreachCount Int @default(0) @map("outreach_count")
+  firstContactAt DateTime? @map("first_contact_at")
   lastOutreachDate DateTime? @map("last_outreach_date")
-
-  notes            Json      @default("[]")
-
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
-
-  @@index([status])
+  followUpDate DateTime? @map("follow_up_date")
+  notes Json @default("[]")
+  problems LeadProblem[]
+  scores LeadScore[]
+  activities Activity[]
+  outreachMessages OutreachMessage[]
+  aiJobs AIJob[]
+  suppressions Suppression[]
+  contacts Contact[]
+  emailThreads EmailThread[]
+  assetAssessments LeadAssetAssessment[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([status, priorityScore])
+  @@index([qualificationDecision, priorityScore])
+  @@index([followUpDate, status])
+  @@index([replyStatus, lastReplyAt])
+  @@index([replyHandledAt])
+  @@index([revisitAt])
+  @@index([emailEnrichmentStatus, nextEmailEnrichmentAt])
   @@index([lighthouseScore])
   @@index([isAgencyManaged])
   @@index([isNationalChain])
-  @@index([followUpDate])
   @@map("leads")
+}
+
+model Contact {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  type String
+  value String
+  role String?
+  source String?
+  verificationStatus String? @map("verification_status")
+  isPrimary Boolean @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@unique([leadId, type, value])
+  @@index([type, value])
+  @@index([leadId, isPrimary])
+  @@map("contacts")
+}
+
+model OutreachSequence {
+  id Int @id @default(autoincrement())
+  name String @unique
+  delaysDays Json @map("delays_days")
+  maxTouches Int @map("max_touches")
+  isActive Boolean @default(false) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([isActive])
+  @@map("outreach_sequences")
+}
+
+model EmailThread {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  provider String
+  providerThreadId String @unique @map("provider_thread_id")
+  recipientEmail String? @map("recipient_email")
+  status String @default("open")
+  lastOutboundAt DateTime? @map("last_outbound_at")
+  lastInboundAt DateTime? @map("last_inbound_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, provider])
+  @@index([status, lastInboundAt])
+  @@map("email_threads")
+}
+
+model LeadProblem {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  category String
+  title String
+  evidence String
+  businessConsequence String @map("business_consequence")
+  recommendedImprovement String? @map("recommended_improvement")
+  confidence Float
+  outreachValue String @map("outreach_value")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId])
+  @@map("lead_problems")
+}
+
+model LeadScore {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  businessFit Int @map("business_fit")
+  websiteNeed Int @map("website_need")
+  abilityToPay Int @map("ability_to_pay")
+  contactability Int
+  urgency Int
+  salesOpportunity Int @map("sales_opportunity")
+  compositeScore Int @map("composite_score")
+  model String
+  researchVersion String @map("research_version")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, createdAt])
+  @@map("lead_scores")
+}
+
+model Activity {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  type String
+  summary String
+  metadata Json @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, createdAt])
+  @@map("activities")
+}
+
+model OutreachMessage {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  kind String
+  sequenceNumber Int @default(1) @map("sequence_number")
+  subject String
+  bodyText String @map("body_text")
+  angle String?
+  cta String?
+  confidence Float?
+  requiresReview Boolean @default(true) @map("requires_review")
+  generationReason String? @map("generation_reason") @db.Text
+  promptVersion String? @map("prompt_version")
+  scheduledAt DateTime? @map("scheduled_at")
+  status String @default("draft")
+  idempotencyKey String? @unique @map("idempotency_key")
+  sendAttemptedAt DateTime? @map("send_attempted_at")
+  sendError String? @map("send_error")
+  providerMessageId String? @unique @map("provider_message_id")
+  providerThreadId String? @map("provider_thread_id")
+  generatedAt DateTime @default(now()) @map("generated_at")
+  approvedAt DateTime? @map("approved_at")
+  sentAt DateTime? @map("sent_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, sentAt])
+  @@index([providerThreadId])
+  @@index([status, scheduledAt])
+  @@index([status, sendAttemptedAt])
+  @@index([kind, status, promptVersion])
+  @@map("outreach_messages")
+}
+
+model Suppression {
+  id Int @id @default(autoincrement())
+  leadId Int? @map("lead_id")
+  value String
+  type String
+  reason String
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead? @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@unique([type, value])
+  @@index([leadId])
+  @@map("suppressions")
+}
+
+model AIJob {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  type String
+  status String @default("pending")
+  model String
+  promptVersion String @map("prompt_version")
+  packetHash String? @map("packet_hash")
+  inputTokens Int? @map("input_tokens")
+  cachedTokens Int? @map("cached_tokens")
+  outputTokens Int? @map("output_tokens")
+  estimatedCost Float? @map("estimated_cost")
+  error String?
+  startedAt DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([leadId, createdAt])
+  @@index([leadId, type, packetHash])
+  @@index([status])
+  @@map("ai_jobs")
+}
+
+model LeadAssetAssessment {
+  id Int @id @default(autoincrement())
+  leadId Int @map("lead_id")
+  decision String
+  assetStrength String @map("asset_strength")
+  dimensions Json
+  performanceAssessment Json @map("performance_assessment")
+  siteCoverage Json @map("site_coverage")
+  researchSummary String @map("research_summary") @db.Text
+  decisionReason String @map("decision_reason") @db.Text
+  confidence Float
+  model String
+  researchVersion String @map("research_version")
+  createdAt DateTime @default(now()) @map("created_at")
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  findings LeadFinding[]
+  @@index([leadId, createdAt])
+  @@index([decision, createdAt])
+  @@map("lead_asset_assessments")
+}
+
+model LeadFinding {
+  id Int @id @default(autoincrement())
+  assessmentId Int @map("assessment_id")
+  category String
+  title String
+  evidence String @db.Text
+  assetCapability String @map("asset_capability") @db.Text
+  confidence Float
+  significance String
+  evidenceSources Json @map("evidence_sources")
+  createdAt DateTime @default(now()) @map("created_at")
+  assessment LeadAssetAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  @@index([assessmentId])
+  @@index([category, significance])
+  @@map("lead_findings")
+}
+
+model AutomationLock {
+  name String @id
+  token String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([expiresAt])
+  @@map("automation_locks")
+}
+
+model AutomationRun {
+  id Int @id @default(autoincrement())
+  jobName String @map("job_name")
+  status String @default("running")
+  processed Int @default(0)
+  succeeded Int @default(0)
+  failed Int @default(0)
+  errorSummary String? @map("error_summary") @db.Text
+  metadata Json @default("{}")
+  startedAt DateTime @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([jobName, startedAt])
+  @@index([status, startedAt])
+  @@map("automation_runs")
+}
+
+model AppSettings {
+  id Int @id @default(1)
+  autoEnrich Boolean @default(true) @map("auto_enrich")
+  autoResearch Boolean @default(true) @map("auto_research")
+  autoPrioritize Boolean @default(true) @map("auto_prioritize")
+  autoSelectOutreachAngle Boolean @default(true) @map("auto_select_outreach_angle")
+  autoDraftOutreach Boolean @default(true) @map("auto_draft_outreach")
+  autoSyncReplies Boolean @default(true) @map("auto_sync_replies")
+  autoProcessFollowups Boolean @default(true) @map("auto_process_followups")
+  autoSendApproved Boolean @default(true) @map("auto_send_approved")
+  autoGenerateSuggestedReplies Boolean @default(true) @map("auto_generate_suggested_replies")
+  approvalMode String @default("manual") @map("approval_mode")
+  researchModel String @default("gpt-5.6-luna") @map("research_model")
+  outreachModel String @default("gpt-5.6-luna") @map("outreach_model")
+  researchBatchSize Int @default(10) @map("research_batch_size")
+  minPriorityScore Int @default(45) @map("min_priority_score")
+  minAutoApprovePriority Int @default(75) @map("min_auto_approve_priority")
+  minAutoApproveConfidence Float @default(0.85) @map("min_auto_approve_confidence")
+  minProblemConfidence Float @default(0.70) @map("min_problem_confidence")
+  priorityWeights Json @default("{\"opportunityType\":30,\"findingStrength\":25,\"contactability\":15,\"businessMaturity\":10,\"acquisitionIntent\":10,\"evidenceQuality\":10}") @map("priority_weights")
+  dailyAiSpendLimit Float @default(5) @map("daily_ai_spend_limit")
+  monthlyAiSpendLimit Float @default(100) @map("monthly_ai_spend_limit")
+  dailySendLimit Int @default(40) @map("daily_send_limit")
+  sendWindowStart String @default("09:00") @map("send_window_start")
+  sendWindowEnd String @default("16:30") @map("send_window_end")
+  sendTimezone String @default("America/Chicago") @map("send_timezone")
+  weekendSendingEnabled Boolean @default(false) @map("weekend_sending_enabled")
+  reanalysisAgeDays Int @default(30) @map("reanalysis_age_days")
+  followUpDelaysDays Json @default("[4,6,10,14]") @map("follow_up_delays_days")
+  senderName String @default("Brian Woodson") @map("sender_name")
+  senderEmail String @default("leads@brianwoodson.dev") @map("sender_email")
+  followUpInstructions String @default("Write concise natural continuations of the existing cold outreach thread using only stored research and prior messages. Never say just following up, checking in, circling back, touching base, or bumping this. Do not invent new problems, metrics, urgency, or familiarity. Follow-up 1 briefly reinforces the original problem. Follow-up 2 adds another evidence-supported perspective on the same opportunity. Follow-up 3 is a short low-pressure continuation. Follow-up 4 is the breakup: close the loop respectfully, do not introduce a new problem or pitch, do not guilt or pressure the prospect, do not manufacture urgency, and leave the door open if timing changes. Use one CTA on follow-ups 1-3 and no new subject line. The breakup should not ask for a meeting or create another follow-up obligation.") @map("follow_up_instructions") @db.Text
+  replyInstructions String @default("Classify the prospect reply by intent using only the message content and thread context. Distinguish interested, question, objection, not_now, not_interested, wrong_person, referral, out_of_office, bounce, unsubscribe, spam_or_scam, booking_intent, and other. Summarize what the prospect wants, extract any return date/referral/question when present, recommend the next human action, and provide a concise suggested response only when human review is appropriate.") @map("reply_instructions") @db.Text
+  researchInstructions String @default("Evaluate the supplied website as an observable business asset for the business it represents. Assess performance effectiveness, demand alignment, business representation, customer-action capability, acquisition readiness, and site maturity. Determine whether the evidence supports a rebuild candidate, optimization candidate, no material opportunity, or needs review. Do not manufacture deficiencies or choose an outreach angle.") @map("research_instructions") @db.Text
+  outreachInstructions String @default("Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.") @map("outreach_instructions") @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("app_settings")
 }

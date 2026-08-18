@@ -1,0 +1,28 @@
+name: Backend checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    env:
+      # Prisma 7 loads prisma.config.ts during npm's postinstall generate step.
+      # This URL is only for schema generation/typechecking; CI never connects to it.
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/lead_miner_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test and build
+        run: npm run check

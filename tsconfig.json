@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "moduleResolution": "node16"
   },
-  "exclude": ["prisma.config.ts", "node_modules", "dist"]
+  "exclude": ["prisma.config.ts", "node_modules", "dist", "test"]
 }

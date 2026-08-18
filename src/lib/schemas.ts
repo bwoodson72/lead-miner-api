@@ -6,7 +6,6 @@ export const KeywordInputSchema = z.object({
   lcp: z.number().default(4000),
   cls: z.number().default(0.25),
   tbt: z.number().default(300),
-  email: z.string().email(),
   location: z.string().optional().default(""),
   maxDomains: z.number().min(1).max(200).default(100),
 });
@@ -47,7 +46,9 @@ export const LeadRecordSchema = z.object({
   businessName: z.string().optional(),
   contactPageUrl: z.string().url().optional(),
   email: z.string().email().optional(),
+  emailSource: z.enum(["enrichment", "discovery"]).optional(),
   phone: z.string().optional(),
+  phoneSource: z.enum(["enrichment", "discovery"]).optional(),
   address: z.string().optional(),
   enrichmentStatus: z.enum(["pending", "enriched", "failed", "skipped"]).optional(),
   enrichmentNotes: z.string().optional(),
