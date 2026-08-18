@@ -25,7 +25,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v16";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v17";
 
 function schema() {
   return {
@@ -95,6 +95,12 @@ export function containsTechnicalAuditLanguage(value: string) {
   return /\b(?:Lighthouse|PageSpeed(?: Insights)?|Core Web Vitals?|LCP|CLS|TBT|performance score|audit score|crawler|crawl result|evidence source|milliseconds?|\d+(?:\.\d+)?\s*ms)\b/i.test(value);
 }
 
+export function containsProspectFacingImplementationStack(value: string) {
+  if (/\b(?:WordPress|Wix|Elementor|Webflow|Squarespace|Shopify|Drupal|Joomla|Next(?:\.js|JS)?|React\.js|Vue\.js|SvelteKit|Gatsby|Nuxt(?:\.js)?|Tailwind(?: CSS)?|Node\.js|Express\.js|PHP|headless CMS|static site generator|Jamstack)\b/i.test(value)) return true;
+  if (/\b(?:custom-coded|hand-coded|tech stack|technology stack|implementation stack)\b/i.test(value)) return true;
+  return /\b(?:build(?:s|ing|t)?|develop(?:s|ed|ing)?|code(?:s|d|ing)?|using|uses?|powered by|runs? on|work(?:s|ing)?\s+(?:with|in|on)|framework|stack|platform)\b[^.!?\n]{0,50}\b(?:Astro(?:\.js)?|React|Vue|Svelte|Angular)\b/i.test(value);
+}
+
 export function containsDisallowedExistingSiteServiceOffer(value: string) {
   const work = "(?:fix|repair|optimi[sz]e|tune|speed up|improve|patch)";
   const target = "(?:(?:the|your|this)(?:\\s+(?:current|existing))?|current|existing)\\s+(?:website|site|page|homepage|implementation)";
@@ -110,7 +116,7 @@ export function ctaNeedsRegeneration(value: string) {
   if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
   if (/\b(?:consultation|meeting|schedule|calendar|book|15 minutes|10 minutes|20 minutes|quick call|brief call|conversation)\b/i.test(cta)) return true;
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
-  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta) || containsDisallowedExistingSiteServiceOffer(cta)) return true;
+  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta) || containsProspectFacingImplementationStack(cta) || containsDisallowedExistingSiteServiceOffer(cta)) return true;
   return false;
 }
 
@@ -141,6 +147,7 @@ export function subjectNeedsRegeneration(value: string) {
   if (/\b(?:free audit|website audit|urgent|act now|limited time|quick question|proposal|opportunity)\b/i.test(subject)) return true;
   if (/[!]{1,}/.test(subject)) return true;
   if (containsProspectFacingPerformanceMeasurement(subject)) return true;
+  if (containsProspectFacingImplementationStack(subject)) return true;
   return false;
 }
 
@@ -212,7 +219,8 @@ function draftValidationIssues(draft: OutreachDraft, senderName: string, recentC
   if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
   if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
   if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Do not put exact performance measurements in prospect-facing copy. Describe the delay or responsiveness qualitatively instead.");
-  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer optimization, repair, tuning, or page-builder work on the existing website. Brian's service is a new custom Astro build.");
+  if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove framework, CMS, platform, coding-stack, or implementation details. Prospect-facing positioning is simply that Brian builds custom websites.");
+  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer optimization, repair, tuning, or page-builder work on the existing website. Brian's service is a new custom website.");
   if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, optimization, or repair in Touch 1.");
   if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
   if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
@@ -233,6 +241,7 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
     || containsTechnicalAuditLanguage(`${subject}\n${bodyText}\n${cta}`)
     || containsProspectFacingPerformanceMeasurement(`${subject}\n${bodyText}\n${cta}`)
+    || containsProspectFacingImplementationStack(`${subject}\n${bodyText}\n${cta}`)
     || containsDisallowedExistingSiteServiceOffer(`${bodyText}\n${cta}`)
     || (subject ? subjectNeedsRegeneration(subject) : false)
     || (cta ? ctaNeedsRegeneration(cta) : false);
@@ -240,7 +249,7 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
 
 const HARD_OUTREACH_RULES = [
   "Write Touch 1 as a short email Brian would personally type after noticing one real thing on a business website.",
-  "Brian's actual service is a new custom-coded website built on Astro. He does not sell optimization, repair, maintenance, tuning, plugin work, or page-builder fixes on an existing website. Never imply that he will optimize or repair the prospect's current WordPress, Wix, Elementor, or other page-builder implementation.",
+  "Brian's actual service is a new custom website for service businesses. He does not sell optimization, repair, maintenance, tuning, plugin work, or page-builder fixes on an existing website. Never imply that he will optimize or repair the prospect's current implementation.",
   "The lead reaching this stage has been qualified because a custom rebuild is a reasonable business option. Touch 1 still should not pitch the rebuild; use the verified finding to earn a reply first.",
   "The goal is only to earn a reply or permission to send the details. Do not try to book a consultation, meeting, calendar slot, or call in this first email.",
   "Use one verified observation and one owner stake. The persuasion should come from why the fact matters, not from sales language.",
@@ -251,9 +260,10 @@ const HARD_OUTREACH_RULES = [
   "Never invent metrics, traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
   "Exact performance measurements are private evidence, not prospect copy. Do not mention numeric or spelled-out load times, milliseconds, seconds, percentages, scores, or benchmark values; describe the observable delay or sluggishness qualitatively.",
   "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, crawlers, evidence sources, Lead Miner, or AI research.",
+  "Never mention the implementation stack, framework, CMS, platform, page builder, coding approach, or how a new site would be built. Do not mention Astro, WordPress, Wix, Elementor, Webflow, Squarespace, Shopify, Next.js, React, or similar technologies. Prospect-facing positioning is simply that Brian builds custom websites.",
   "Do not explain implementation details, diagnose the whole website, prescribe a repair checklist, offer an optimization, or sell the project.",
   "Start bodyText exactly with Hi, on its own line followed by a blank line. Do not invent a recipient name or team name.",
-  "Give enough context somewhere in the email that it is clear the sender builds custom websites or works in web development for service businesses. Use whatever short wording fits the email; do not force the same sentence into every message. Do not mention Astro unless it naturally becomes relevant; the stack is not the hook.",
+  "Give enough context somewhere in the email that it is clear the sender builds custom websites or works in web development for service businesses. Use whatever short wording fits the email; do not force the same sentence into every message.",
   "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language and do not offer to optimize, fix, tune, or repair the existing site in the CTA.",
   "The cta field must exactly match that final question in bodyText.",
   "Sign off with the sender's first name on its own line. No signature block.",
@@ -399,9 +409,9 @@ export async function generateOutreachDraft(input: {
     businessType: input.keyword,
     qualificationDecision: input.qualificationDecision ?? null,
     offerContext: {
-      service: "new custom-coded website",
-      implementation: "Astro",
+      service: "new custom website",
       existingSiteWork: "not offered: no optimization, repair, maintenance, plugin work, or page-builder fixes",
+      prospectFacingPositioning: "custom websites only; no framework, CMS, platform, or implementation details",
     },
     strategy: writerStrategy,
     recentCtas,
@@ -409,7 +419,7 @@ export async function generateOutreachDraft(input: {
       name: senderName,
       firstName: senderFirstName,
       role: "web developer",
-      work: "builds new custom Astro websites for service businesses",
+      work: "builds new custom websites for service businesses",
       email: senderEmail,
     },
   };
