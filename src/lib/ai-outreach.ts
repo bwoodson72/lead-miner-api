@@ -25,7 +25,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v17";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v18";
 
 function schema() {
   return {
@@ -44,18 +44,38 @@ function schema() {
 }
 
 const SPELLED_NUMBER = "(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty)";
-const EXACT_DURATION_RE = new RegExp(`\\b(?:\\d+(?:\\.\\d+)?|${SPELLED_NUMBER})\\s*(?:milliseconds?|ms|seconds?|secs?)\\b`, "i");
+const HUMAN_DURATION_RE = new RegExp(`\\b(?:(?:about|around|roughly|nearly|almost|close to|over|under)\\s+)?(?:\\d+(?:\\.\\d+)?|${SPELLED_NUMBER}|half a|a)\\s*(?:seconds?|secs?|minutes?|mins?)\\b`, "i");
+const OVERPRECISE_DURATION_RE = /\b\d+\.\d{2,}\s*(?:seconds?|secs?|minutes?|mins?)\b/i;
 
 export function containsProspectFacingPerformanceMeasurement(value: string) {
-  if (EXACT_DURATION_RE.test(value)) return true;
+  if (/\b\d+(?:\.\d+)?\s*(?:milliseconds?|ms)\b/i.test(value)) return true;
+  if (OVERPRECISE_DURATION_RE.test(value)) return true;
   return /\b(?:load(?:ing)?|page|homepage|content|respond|response|delay|performance|speed)\b[^.!?\n]{0,70}\b\d+(?:\.\d+)?\s*%\b/i.test(value);
+}
+
+function humanizeSeconds(raw: string) {
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "a noticeable amount of time";
+  if (seconds >= 50 && seconds <= 70) return "close to a minute";
+  if (seconds > 70 && seconds < 110) return "over a minute";
+  if (seconds >= 110) return `about ${Math.max(2, Math.round(seconds / 60))} minutes`;
+  return `about ${Math.max(1, Math.round(seconds))} seconds`;
+}
+
+function humanizeMinutes(raw: string) {
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes <= 0) return "a noticeable amount of time";
+  if (minutes < 0.75) return humanizeSeconds(String(minutes * 60));
+  if (minutes < 1.25) return "about a minute";
+  return `about ${Math.max(1, Math.round(minutes))} minutes`;
 }
 
 function sanitizePerformanceMeasurements(value: string | null): string | null {
   if (!value) return value;
-  const duration = new RegExp(`\\b(?:\\d+(?:\\.\\d+)?|${SPELLED_NUMBER})\\s*(?:milliseconds?|ms|seconds?|secs?)\\b`, "gi");
   return value
-    .replace(duration, "a noticeable amount of time")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:milliseconds?|ms)\b/gi, "a noticeable delay")
+    .replace(/\b(?:about|around|roughly|nearly|almost|close to|over|under)?\s*(\d+(?:\.\d+)?)\s*(?:s|seconds?|secs?)\b/gi, (_match, raw: string) => humanizeSeconds(raw))
+    .replace(/\b(?:about|around|roughly|nearly|almost|close to|over|under)?\s*(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b/gi, (_match, raw: string) => humanizeMinutes(raw))
     .replace(/\b(?:performance|speed|load(?:ing)?)\s+(?:score|rating)?\s*(?:of|at|:)\s*\d+(?:\.\d+)?%?/gi, "measured site performance")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -73,8 +93,6 @@ export function sanitizeProspectFacingEvidence(value: string | null): string | n
     .replace(/\bTBT\b/gi, "page responsiveness")
     .replace(/\bperformance score\b/gi, "site performance")
     .replace(/\bscore(?:d)?\s*(?:of|at|:)\s*\d+(?:\/100)?\b/gi, "showed weak performance")
-    .replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?)\b/gi, "a noticeable delay")
-    .replace(/\b\d+(?:\.\d+)?\s*(?:s|seconds?)\b/gi, "a long time")
     .replace(/\s{2,}/g, " ")
     .trim());
 }
@@ -89,6 +107,10 @@ export function containsConsultantJargon(value: string) {
 
 export function containsArtificialOutreachLanguage(value: string) {
   return /\b(?:customer journey|visitor experience|prospective customers?|prospective clients?|high-intent visitors?|business proposition|initial presentation|initial usability|first-visit friction|page responsiveness)\b|\bfriction\b|\b(?:evaluate|engage) the business\b/i.test(value);
+}
+
+export function containsAuditDiagnosisLanguage(value: string) {
+  return /\b(?:what|which|where)\s+(?:may|might|could)\s+be\s+(?:contributing|causing|behind)\b|\bwhat(?:'s| is)\s+(?:contributing|causing|behind)\b|\bwhere it affects the page\b|\broot causes?\b|\bcontributing factors?\b/i.test(value);
 }
 
 export function containsTechnicalAuditLanguage(value: string) {
@@ -116,7 +138,7 @@ export function ctaNeedsRegeneration(value: string) {
   if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
   if (/\b(?:consultation|meeting|schedule|calendar|book|15 minutes|10 minutes|20 minutes|quick call|brief call|conversation)\b/i.test(cta)) return true;
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
-  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta) || containsProspectFacingImplementationStack(cta) || containsDisallowedExistingSiteServiceOffer(cta)) return true;
+  if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsAuditDiagnosisLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta) || containsProspectFacingImplementationStack(cta) || containsDisallowedExistingSiteServiceOffer(cta)) return true;
   return false;
 }
 
@@ -146,6 +168,7 @@ export function subjectNeedsRegeneration(value: string) {
   if (subject.split(/\s+/).length > 9) return true;
   if (/\b(?:free audit|website audit|urgent|act now|limited time|quick question|proposal|opportunity)\b/i.test(subject)) return true;
   if (/[!]{1,}/.test(subject)) return true;
+  if (HUMAN_DURATION_RE.test(subject)) return true;
   if (containsProspectFacingPerformanceMeasurement(subject)) return true;
   if (containsProspectFacingImplementationStack(subject)) return true;
   return false;
@@ -217,14 +240,15 @@ function draftValidationIssues(draft: OutreachDraft, senderName: string, recentC
   if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
   if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
   if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
+  if (containsAuditDiagnosisLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Offer the observation or details, not a technical diagnosis of what may be causing or contributing to the issue.");
   if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
-  if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Do not put exact performance measurements in prospect-facing copy. Describe the delay or responsiveness qualitatively instead.");
+  if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Use rounded, human-readable elapsed time only. Remove milliseconds, benchmark-style percentages, or overly precise tool-like timing.");
   if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove framework, CMS, platform, coding-stack, or implementation details. Prospect-facing positioning is simply that Brian builds custom websites.");
   if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer optimization, repair, tuning, or page-builder work on the existing website. Brian's service is a new custom website.");
-  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, optimization, or repair in Touch 1.");
+  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, optimization, repair, or implementation diagnosis in Touch 1.");
   if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
   if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
-  if (subjectNeedsRegeneration(draft.subject)) issues.push("Use a mundane, specific subject of nine words or fewer; no hype and no generic Quick question subject.");
+  if (subjectNeedsRegeneration(draft.subject)) issues.push("Use a mundane, specific subject of nine words or fewer; no hype, technical timing, or generic Quick question subject.");
   const words = wordCount(draft.bodyText);
   if (words < 45 || words > 110) issues.push("Keep the complete email roughly 55-100 words; do not pad it.");
   if (!endsWithSenderFirstName(draft.bodyText, senderName)) issues.push("Sign off with the sender's first name on its own line.");
@@ -239,6 +263,7 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || containsMinimizingRemediation(bodyText)
     || containsConsultantJargon(bodyText)
     || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
+    || containsAuditDiagnosisLanguage(`${bodyText}\n${cta}`)
     || containsTechnicalAuditLanguage(`${subject}\n${bodyText}\n${cta}`)
     || containsProspectFacingPerformanceMeasurement(`${subject}\n${bodyText}\n${cta}`)
     || containsProspectFacingImplementationStack(`${subject}\n${bodyText}\n${cta}`)
@@ -257,17 +282,18 @@ const HARD_OUTREACH_RULES = [
   "Loss aversion, self-interest, competitive choice, protecting existing spend, trust, and ease of action should shape what you say, not make the email sound like advertising copy.",
   "Write in ordinary spoken English. Contractions and simple phrases are welcome. Prefer words a service-business owner would use over analyst or consultant terminology.",
   "Do not copy or lightly paraphrase the private notes. Write the email from scratch as if the sender personally noticed the issue.",
-  "Never invent metrics, traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
-  "Exact performance measurements are private evidence, not prospect copy. Do not mention numeric or spelled-out load times, milliseconds, seconds, percentages, scores, or benchmark values; describe the observable delay or sluggishness qualitatively.",
+  "Never invent traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
+  "When measured elapsed time helps communicate severity, you may use a rounded, human-readable duration such as about 20 seconds, close to a minute, or over a minute. Do not expose milliseconds, performance metric names, scores, benchmark values, percentages from testing, or overly precise decimal timing copied from tools.",
   "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, crawlers, evidence sources, Lead Miner, or AI research.",
   "Never mention the implementation stack, framework, CMS, platform, page builder, coding approach, or how a new site would be built. Do not mention Astro, WordPress, Wix, Elementor, Webflow, Squarespace, Shopify, Next.js, React, or similar technologies. Prospect-facing positioning is simply that Brian builds custom websites.",
   "Do not explain implementation details, diagnose the whole website, prescribe a repair checklist, offer an optimization, or sell the project.",
+  "Do not tease an implementation diagnosis with wording such as what may be contributing, what may be causing it, root cause, or where it affects the page. The offer in Touch 1 is to send the observation or details, not to troubleshoot the existing site.",
   "Start bodyText exactly with Hi, on its own line followed by a blank line. Do not invent a recipient name or team name.",
   "Give enough context somewhere in the email that it is clear the sender builds custom websites or works in web development for service businesses. Use whatever short wording fits the email; do not force the same sentence into every message.",
-  "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language and do not offer to optimize, fix, tune, or repair the existing site in the CTA.",
+  "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language and do not offer to optimize, fix, tune, repair, or diagnose the existing site in the CTA.",
   "The cta field must exactly match that final question in bodyText.",
   "Sign off with the sender's first name on its own line. No signature block.",
-  "Use a mundane, specific subject tied to the page, location, service, or thing noticed. Keep it under nine words. No hype, fake urgency, Free audit, Website audit, or Quick question.",
+  "Use a mundane, specific subject tied to the page, location, service, or thing noticed. Keep it under nine words. Do not put timing measurements in the subject. No hype, fake urgency, Free audit, Website audit, or Quick question.",
   "Keep the whole email roughly 55 to 100 words.",
   "No fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
   "Return only the required structured draft.",
