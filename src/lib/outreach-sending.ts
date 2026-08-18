@@ -58,7 +58,6 @@ async function assertSendEligible(prisma: PrismaClient, messageId: number) {
   if (!isCurrentOutreachPromptVersion(message.kind, message.promptVersion)) throw new Error(staleOutreachReason(message.kind, message.promptVersion) ?? "Outreach draft is stale");
   if (outreachMessageNeedsRegeneration(message.kind, message.bodyText, message.subject, message.cta ?? "")) throw new Error("Outreach draft failed current message-quality checks and must be regenerated or manually edited before sending");
   if (message.sequenceNumber > TOTAL_OUTREACH_TOUCHES) throw new Error(`Outreach sequence is capped at ${TOTAL_OUTREACH_TOUCHES} total touches`);
-  if (message.scheduledAt && message.scheduledAt > new Date()) throw new Error(`Message is scheduled for ${message.scheduledAt.toISOString()}`);
   const paused = await prisma.suppression.findUnique({ where: { type_value: { type: "global", value: "outreach" } } });
   if (paused) throw new Error("Outreach is paused");
   const globalReason = await globalSuppressionReason(prisma, message.lead);
@@ -88,7 +87,7 @@ async function completeSend(prisma: PrismaClient, message: any, provider: { prov
   const nextStatus = followUpDate ? "contacted" : "closed_no_response";
 
   return prisma.$transaction(async (tx) => {
-    const updated = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
+    const updated = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, scheduledAt: null, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
     await tx.lead.update({ where: { id: message.leadId }, data: { status: nextStatus, outreachCount: { increment: 1 }, firstContactAt: message.lead.firstContactAt ?? sentAt, lastOutreachDate: sentAt, followUpDate } });
     if (provider.providerThreadId) await tx.emailThread.upsert({ where: { providerThreadId: provider.providerThreadId }, update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt }, create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt } });
     const followUpNumber = message.kind === "followup" ? message.sequenceNumber - 1 : null;
@@ -118,7 +117,6 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
   if (!lease) throw new Error("Another send operation is already in progress");
   try {
     const settings = await getAppSettings(prisma);
-    if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd, new Date(), settings.sendTimezone, settings.weekendSendingEnabled)) throw new Error(`Outside configured send window (${settings.sendWindowStart}-${settings.sendWindowEnd} ${settings.sendTimezone})`);
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const sentOrClaimedToday = await prisma.outreachMessage.count({ where: { OR: [{ status: "sent", sentAt: { gte: startOfDay } }, { status: "sending", sendAttemptedAt: { gte: startOfDay } }] } });
     if (sentOrClaimedToday >= settings.dailySendLimit) throw new Error(`Daily send limit reached (${settings.dailySendLimit})`);
@@ -145,6 +143,8 @@ export async function reconcileStaleSends(prisma: PrismaClient, limit = 10, retr
 }
 
 export async function sendApprovedQueue(prisma: PrismaClient, limit = 25) {
+  const settings = await getAppSettings(prisma);
+  if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd, new Date(), settings.sendTimezone, settings.weekendSendingEnabled)) return [];
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
   const now = new Date();
   const messages = await prisma.outreachMessage.findMany({ where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES }, OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
