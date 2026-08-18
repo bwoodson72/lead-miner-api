@@ -14,7 +14,15 @@ import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env["DATABASE_URL"]! }) });
-const allowedOrigins = (process.env["ALLOWED_ORIGINS"] ?? "http://localhost:3000").split(",").map((o) => o.trim());
+const configuredOrigins = (process.env["ALLOWED_ORIGINS"] ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = Array.from(new Set([
+  ...configuredOrigins,
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]));
 const app = express();
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json({ limit: "1mb" }));
@@ -66,7 +74,7 @@ app.get("/api/leads", async (req, res) => {
   try { const take = Math.min(100, Math.max(1, limit ? parseInt(limit, 10) : 50)); const skip = Math.max(0, offset ? parseInt(offset, 10) : 0); const [leads,total] = await Promise.all([prisma.lead.findMany({ where, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take, skip }), prisma.lead.count({ where })]); res.json({ leads, total, limit: take, offset: skip }); } catch (err) { res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) }); }
 });
 
-app.get("/api/leads/:id/detail", async (req, res) => { const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; } try { const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] }, scores: { orderBy: { createdAt: "desc" } }, outreachMessages: { orderBy: [{ sequenceNumber: "asc" }, { generatedAt: "asc" }] }, activities: { orderBy: { createdAt: "desc" } }, aiJobs: { orderBy: { createdAt: "desc" } }, suppressions: { orderBy: { createdAt: "desc" } }, contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] }, emailThreads: { orderBy: { updatedAt: "desc" } } } }); if (!lead) { res.status(404).json({ error: "Lead not found" }); return; } res.json({ lead }); } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : String(err) }); } });
+app.get("/api/leads/:id/detail", async (req, res) => { const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid id" }); return; } try { const lead = await prisma.lead.findUnique({ where: { id }, include: { problems: { orderBy: [{ outreachValue: "desc" }, { confidence: "desc" }] }, scores: { orderBy: { createdAt: "desc" } }, outreachMessages: { orderBy: [{ sequenceNumber: "asc" }, { generatedAt: "asc" }] }, activities: { orderBy: { createdAt: "desc" } }, aiJobs: { orderBy: { createdAt: "desc" } }, suppressions: { orderBy: { createdAt: "desc" } }, contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] }, emailThreads: { orderBy: { updatedAt: "desc" } } } }); if (!lead) { res.status(404).json({ error: "Lead not found" }); return; } res.json({ lead }); } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : String(err) }); } });
 
 app.get("/api/dashboard/summary", async (_req, res) => { const now = new Date(); const [newLeads,qualified,ready,followupsDue,replies,interested,aiFailures] = await Promise.all([prisma.lead.count({ where: { status: { in: ["new", "research_pending"] } } }), prisma.lead.count({ where: { status: "qualified" } }), prisma.lead.count({ where: { status: "ready_for_outreach" } }), prisma.lead.count({ where: { status: "contacted", followUpDate: { lte: now } } }), prisma.lead.count({ where: { replyStatus: { not: null } } }), prisma.lead.count({ where: { status: "interested" } }), prisma.aIJob.count({ where: { status: "failed" } })]); res.json({ newLeads, qualified, ready, followupsDue, replies, interested, aiFailures }); });
 
@@ -82,4 +90,13 @@ registerOutreachRoutes(app, prisma);
 setInterval(cleanOldJobs, 10 * 60 * 1000);
 const port = process.env["PORT"] ?? 3001;
 const server = app.listen(port, () => console.log(`[Server] Listening on port ${port}`));
-for (const signal of ["SIGINT","SIGTERM"] as const) process.on(signal, () => { server.close(() => prisma.$disconnect().finally(() => process.exit(0))); });
+
+async function shutdown(signal: string) {
+  console.log(`[Server] ${signal} received, closing gracefully...`);
+  server.close(async () => {
+    try { await prisma.$disconnect(); } finally { process.exit(0); }
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
