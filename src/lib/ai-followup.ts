@@ -4,6 +4,7 @@ import { fetchWithProviderBackoff } from "./provider-retry.js";
 import { isBreakupSequenceNumber } from "./outreach-sequence.js";
 import {
   containsArtificialOutreachLanguage,
+  containsAuditDiagnosisLanguage,
   containsConsultantJargon,
   containsDisallowedExistingSiteServiceOffer,
   containsMinimizingRemediation,
@@ -22,7 +23,7 @@ const FollowUpSchema = z.object({
 });
 
 export type FollowUpDraft = z.infer<typeof FollowUpSchema>;
-export const FOLLOWUP_PROMPT_VERSION = "followup-v4";
+export const FOLLOWUP_PROMPT_VERSION = "followup-v5";
 
 function jsonSchema() {
   return {
@@ -41,6 +42,7 @@ export function followUpNeedsRegeneration(value: string) {
   return containsMinimizingRemediation(value)
     || containsConsultantJargon(value)
     || containsArtificialOutreachLanguage(value)
+    || containsAuditDiagnosisLanguage(value)
     || containsTechnicalAuditLanguage(value)
     || containsProspectFacingPerformanceMeasurement(value)
     || containsProspectFacingImplementationStack(value)
@@ -101,7 +103,7 @@ export async function generateFollowUp(input: {
   };
   const followUpNumber = input.sequenceNumber - 1;
   const isBreakup = isBreakupSequenceNumber(input.sequenceNumber);
-  const commonRules = "Write only the body of a follow-up in the existing thread. Use only supplied evidence and prior messages. Never invent facts, metrics, traffic, revenue, ad spend, rankings, urgency, customer behavior, or a new website problem. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, benchmark scores, milliseconds, exact performance measurements, or technical performance scores. Never mention Astro, WordPress, Wix, Elementor, Webflow, Squarespace, Shopify, Next.js, React, a CMS, framework, platform, tech stack, coding approach, or any implementation detail; prospect-facing positioning is simply that Brian builds custom websites. Do not use generic phrases such as just following up, checking in, circling back, touching base, or bumping this. No verified person name is supplied, so do not write a salutation or greet the business/team. Never emit placeholder text such as [Name], Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD. Continue directly from the prior thread. Use ordinary spoken English and keep it concise. Sign off with the sender's first name on its own line. Do not generate a subject line.";
+  const commonRules = "Write only the body of a follow-up in the existing thread. Use only supplied evidence and prior messages. Never invent facts, traffic, revenue, ad spend, rankings, urgency, customer behavior, or a new website problem. A rounded, human-readable elapsed time such as close to a minute or about 20 seconds may be repeated or summarized when it is supported by the supplied evidence or prior thread. Never expose Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, benchmark scores, milliseconds, performance scores, or overly precise decimal timing copied from a tool. Never mention Astro, WordPress, Wix, Elementor, Webflow, Squarespace, Shopify, Next.js, React, a CMS, framework, platform, tech stack, coding approach, or any implementation detail; prospect-facing positioning is simply that Brian builds custom websites. Do not offer a technical diagnosis of what may be contributing to or causing the existing-site problem. Do not use generic phrases such as just following up, checking in, circling back, touching base, or bumping this. No verified person name is supplied, so do not write a salutation or greet the business/team. Never emit placeholder text such as [Name], Acme Roofing, Example Company, Company Name, Business Name, Your Company, Placeholder, or TBD. Continue directly from the prior thread. Use ordinary spoken English and keep it concise. Sign off with the sender's first name on its own line. Do not generate a subject line.";
   const sequenceRules = followUpSequenceGuidance(followUpNumber);
   if (isBreakup && followUpNumber !== 4) throw new Error(`Breakup sequence mismatch for follow-up #${followUpNumber}`);
   const hardRules = `${commonRules} ${sequenceRules}`;
@@ -125,7 +127,7 @@ export async function generateFollowUp(input: {
   const draft: FollowUpDraft = { ...parsed, bodyText: normalizeOutreachBody(parsed.bodyText) };
   if (/^\s*(?:hi|hello|hey|dear)\b/i.test(draft.bodyText)) throw new Error("OpenAI follow-up restarted the thread with a greeting");
   if (containsPlaceholderText(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up contained placeholder text or a fabricated placeholder identity");
-  if (followUpNeedsRegeneration(draft.bodyText)) throw new Error("OpenAI follow-up used unsafe, technical, artificial, or remediation language");
+  if (followUpNeedsRegeneration(draft.bodyText)) throw new Error("OpenAI follow-up used unsafe, technical, artificial, diagnostic, or remediation language");
   if (/^\s*(?:just following up|checking in|circling back|touching base|bumping this|wanted to follow up)/i.test(draft.bodyText)) throw new Error("OpenAI follow-up used a generic follow-up opening");
   const lastLine = draft.bodyText.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
   if (lastLine?.toLowerCase() !== senderFirstName.toLowerCase()) throw new Error("OpenAI follow-up did not sign off with the sender's first name");
