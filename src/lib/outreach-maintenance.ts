@@ -6,7 +6,7 @@ import { processLeadResearch } from "./research-routes.js";
 
 export type RegenerateUnsentScope = "all" | "initial" | "followup";
 
-const OUTREACH_ELIGIBLE_DECISIONS = new Set(["rebuild_candidate", "optimization_candidate"]);
+const OUTREACH_ELIGIBLE_DECISIONS = new Set(["rebuild_candidate"]);
 
 type InitialRegenerationOutcome = {
   replacement: Awaited<ReturnType<typeof ensureInitialOutreachDraft>> | null;
@@ -14,26 +14,29 @@ type InitialRegenerationOutcome = {
   researchDecision?: string;
 };
 
+async function researchThenRegenerate(prisma: PrismaClient, leadId: number): Promise<InitialRegenerationOutcome> {
+  const researched = await processLeadResearch(prisma, leadId);
+  const researchDecision = researched.result.decision;
+  if (!OUTREACH_ELIGIBLE_DECISIONS.has(researchDecision)) {
+    return { replacement: null, action: "cancelled_after_research_not_eligible", researchDecision };
+  }
+  await prioritizeLead(prisma, leadId);
+  await selectLeadOutreachAngle(prisma, leadId, true);
+  return {
+    replacement: await ensureInitialOutreachDraft(prisma, leadId, true),
+    action: "regenerated_after_research",
+    researchDecision,
+  };
+}
+
 async function regenerateInitialWithCurrentEvidence(prisma: PrismaClient, leadId: number): Promise<InitialRegenerationOutcome> {
   try {
     return { replacement: await ensureInitialOutreachDraft(prisma, leadId, true), action: "regenerated" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
-    if (message === "Lead has no business-asset assessment") {
-      const researched = await processLeadResearch(prisma, leadId);
-      const researchDecision = researched.result.decision;
-      if (!OUTREACH_ELIGIBLE_DECISIONS.has(researchDecision)) {
-        return { replacement: null, action: "cancelled_after_research_not_eligible", researchDecision };
-      }
-
-      await prioritizeLead(prisma, leadId);
-      await selectLeadOutreachAngle(prisma, leadId, true);
-      return {
-        replacement: await ensureInitialOutreachDraft(prisma, leadId, true),
-        action: "regenerated_after_research",
-        researchDecision,
-      };
+    if (message === "Lead has no business-asset assessment" || /Legacy optimization candidate is not eligible for outreach/i.test(message)) {
+      return researchThenRegenerate(prisma, leadId);
     }
 
     const staleAngle = message === "Outreach angle has not been selected"
@@ -111,6 +114,20 @@ export async function regenerateUnsentOutreach(
 
         const regeneration = await regenerateInitialWithCurrentEvidence(prisma, message.leadId);
         if (!regeneration.replacement) {
+          await prisma.$transaction(async (tx) => {
+            await tx.outreachMessage.updateMany({
+              where: { leadId: message.leadId, kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved"] } },
+              data: { status: "cancelled", requiresReview: true, sendError: `No current custom-rebuild opportunity after re-research (${regeneration.researchDecision ?? "unknown"})` },
+            });
+            await tx.activity.create({
+              data: {
+                leadId: message.leadId,
+                type: "legacy_outreach_invalidated",
+                summary: `Cancelled stale initial outreach because current research did not qualify a custom rebuild (${regeneration.researchDecision ?? "unknown"})`,
+                metadata: { previousMessageId: message.id, previousPromptVersion: message.promptVersion, researchDecision: regeneration.researchDecision ?? null },
+              },
+            });
+          });
           results.push({
             messageId: message.id,
             leadId: message.leadId,
