@@ -13,7 +13,7 @@ import { estimateAiCost } from "./ai-cost.js";
 import { withAiCapacity } from "./ai-capacity.js";
 import { getContactIdentityRiskReason } from "./contact-safety.js";
 
-const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate", "optimization_candidate"]);
+const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate"]);
 
 async function loadOpportunity(prisma: PrismaClient, leadId: number) {
   const lead = await prisma.lead.findUnique({
@@ -30,7 +30,10 @@ async function loadOpportunity(prisma: PrismaClient, leadId: number) {
   if (!lead) throw new Error("Lead not found");
   const assessment = lead.assetAssessments[0];
   if (!assessment) throw new Error("Lead has no business-asset assessment");
-  if (!QUALIFIED_ASSET_DECISIONS.has(assessment.decision)) throw new Error(`Lead decision ${assessment.decision} is not outreach-eligible`);
+  if (!QUALIFIED_ASSET_DECISIONS.has(assessment.decision)) {
+    if (assessment.decision === "optimization_candidate") throw new Error("Legacy optimization candidate is not eligible for outreach; re-research this lead under the custom-rebuild qualification model");
+    throw new Error(`Lead decision ${assessment.decision} is not outreach-eligible`);
+  }
   if (!lead.email) throw new Error("Lead has no email address");
   return { lead, assessment };
 }
