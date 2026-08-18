@@ -9,25 +9,25 @@ async function cancelUnsafeInitialDrafts(prisma: PrismaClient, limit: number) {
     where: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved"] } },
     orderBy: { generatedAt: "asc" },
     take: Math.max(20, Math.min(limit * 2, 200)),
-    select: { id: true, leadId: true, subject: true, bodyText: true, status: true },
+    select: { id: true, leadId: true, subject: true, bodyText: true, cta: true, status: true },
   });
   let cancelled = 0;
   for (const message of messages) {
-    if (!outreachDraftNeedsRegeneration(message.bodyText, message.subject)) continue;
+    if (!outreachDraftNeedsRegeneration(message.bodyText, message.subject, message.cta ?? "")) continue;
     await prisma.$transaction(async (tx) => {
       await tx.outreachMessage.update({
         where: { id: message.id },
         data: {
           status: "cancelled",
           requiresReview: true,
-          sendError: "Cancelled by outreach quality guard: placeholder, unverified salutation, generic opening, or minimizing remediation",
+          sendError: "Cancelled by current Touch 1 quality and service-offer guard",
         },
       });
       await tx.activity.create({
         data: {
           leadId: message.leadId,
           type: "outreach_draft_invalidated",
-          summary: "Cancelled an unsent outreach draft that failed recipient/opening quality checks",
+          summary: "Cancelled an unsent outreach draft that failed current Touch 1 quality or service-offer checks",
           metadata: { messageId: message.id, previousStatus: message.status },
         },
       });
@@ -45,7 +45,7 @@ export async function processQualifiedOutreachPreparation(prisma: PrismaClient, 
   const leads = await prisma.lead.findMany({
     where: {
       email: { not: null },
-      qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] },
+      qualificationDecision: "rebuild_candidate",
       status: { in: ["qualified", "ready_for_outreach"] },
       OR: [
         { priorityScore: null },
