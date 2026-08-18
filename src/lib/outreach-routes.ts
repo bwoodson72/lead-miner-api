@@ -10,8 +10,7 @@ import { registerAnalyticsRoutes } from "./analytics-routes.js";
 import { getAppSettings } from "./settings.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { regenerateUnsentOutreach } from "./outreach-maintenance.js";
-import { MANUAL_OUTREACH_VERSION, isCurrentOutreachPromptVersion } from "./outreach-version.js";
-import { outreachDraftNeedsRegeneration } from "./ai-outreach.js";
+import { MANUAL_OUTREACH_VERSION, isCurrentOutreachPromptVersion, outreachMessageNeedsRegeneration } from "./outreach-version.js";
 import { getContactIdentityRiskReason } from "./contact-safety.js";
 
 const MessagePatchSchema = z.object({
@@ -103,8 +102,8 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       if (contactRisk) { res.status(409).json({ error: `Approval blocked: ${contactRisk}` }); return; }
       const nextSubject = parsed.subject?.trim() ?? current.subject;
       const nextBody = parsed.bodyText?.trim() ?? current.bodyText;
-      if (outreachDraftNeedsRegeneration(nextBody, nextSubject, current.cta ?? "")) {
-        res.status(409).json({ error: "Approval blocked: draft fails current Touch 1 quality rules and must be regenerated or edited" });
+      if (outreachMessageNeedsRegeneration(current.kind, nextBody, nextSubject, current.cta ?? "")) {
+        res.status(409).json({ error: "Approval blocked: draft fails current message-quality rules and must be regenerated or edited" });
         return;
       }
     }
@@ -169,10 +168,10 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
       const unsafe = messages.flatMap((message) => {
         const contactRisk = getContactIdentityRiskReason(message.lead);
         const stale = !isCurrentOutreachPromptVersion(message.kind, message.promptVersion);
-        const badDraft = outreachDraftNeedsRegeneration(message.bodyText, message.subject, message.cta ?? "");
+        const badDraft = outreachMessageNeedsRegeneration(message.kind, message.bodyText, message.subject, message.cta ?? "");
         const belowThreshold = message.requiresReview || (message.confidence ?? 0) < settings.minAutoApproveConfidence || (message.lead.priorityScore ?? 0) < settings.minAutoApprovePriority;
         if (!contactRisk && !stale && !badDraft && !belowThreshold) return [];
-        const reasons = [contactRisk, stale ? "stale prompt version" : null, badDraft ? "fails current Touch 1 quality rules" : null, belowThreshold ? "below configured approval thresholds or requires review" : null].filter(Boolean);
+        const reasons = [contactRisk, stale ? "stale prompt version" : null, badDraft ? "fails current message-quality rules" : null, belowThreshold ? "below configured approval thresholds or requires review" : null].filter(Boolean);
         return [{ id: message.id, reasons }];
       });
       if (unsafe.length) { res.status(409).json({ error: "Bulk approval blocked because one or more drafts fail recipient, freshness, quality, or approval checks", messageIds: unsafe.map((item) => item.id), issues: unsafe }); return; }
