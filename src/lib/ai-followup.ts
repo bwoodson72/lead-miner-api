@@ -39,7 +39,10 @@ function jsonSchema() {
 }
 
 export function followUpNeedsRegeneration(value: string) {
-  return containsMinimizingRemediation(value)
+  return /^\s*(?:hi|hello|hey|dear)\b/i.test(value)
+    || /^\s*(?:just following up|checking in|circling back|touching base|bumping this|wanted to follow up)\b/i.test(value)
+    || containsPlaceholderText(value)
+    || containsMinimizingRemediation(value)
     || containsConsultantJargon(value)
     || containsArtificialOutreachLanguage(value)
     || containsAuditDiagnosisLanguage(value)
@@ -125,10 +128,7 @@ export async function generateFollowUp(input: {
   if (!raw) throw new Error("OpenAI returned no follow-up output");
   const parsed = FollowUpSchema.parse(JSON.parse(raw));
   const draft: FollowUpDraft = { ...parsed, bodyText: normalizeOutreachBody(parsed.bodyText) };
-  if (/^\s*(?:hi|hello|hey|dear)\b/i.test(draft.bodyText)) throw new Error("OpenAI follow-up restarted the thread with a greeting");
-  if (containsPlaceholderText(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up contained placeholder text or a fabricated placeholder identity");
-  if (followUpNeedsRegeneration(draft.bodyText)) throw new Error("OpenAI follow-up used unsafe, technical, artificial, diagnostic, or remediation language");
-  if (/^\s*(?:just following up|checking in|circling back|touching base|bumping this|wanted to follow up)/i.test(draft.bodyText)) throw new Error("OpenAI follow-up used a generic follow-up opening");
+  if (followUpNeedsRegeneration(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up used a greeting, placeholder, generic follow-up opener, unsafe, technical, artificial, diagnostic, or remediation language");
   const lastLine = draft.bodyText.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
   if (lastLine?.toLowerCase() !== senderFirstName.toLowerCase()) throw new Error("OpenAI follow-up did not sign off with the sender's first name");
   return { draft, model: data.model ?? model, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens };
