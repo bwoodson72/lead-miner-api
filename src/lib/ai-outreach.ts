@@ -96,9 +96,9 @@ export function containsTechnicalAuditLanguage(value: string) {
 }
 
 export function containsProspectFacingImplementationStack(value: string) {
-  if (/\b(?:WordPress|Wix|Elementor|Webflow|Squarespace|Shopify|Drupal|Joomla|Next(?:\.js|JS)?|React\.js|Vue\.js|SvelteKit|Gatsby|Nuxt(?:\.js)?|Tailwind(?: CSS)?|Node\.js|Express\.js|PHP|headless CMS|static site generator|Jamstack)\b/i.test(value)) return true;
+  if (/\b(?:WordPress|Wix|Elementor|Webflow|Squarespace|Shopify|Drupal|Joomla|Next(?:\.?js)|React\.js|Vue\.js|SvelteKit|Gatsby|Nuxt(?:\.js)?|Tailwind(?: CSS)?|Node\.js|Express\.js|PHP|headless CMS|static site generator|Jamstack)\b/i.test(value)) return true;
   if (/\b(?:custom-coded|hand-coded|tech stack|technology stack|implementation stack)\b/i.test(value)) return true;
-  return /\b(?:build(?:s|ing|t)?|develop(?:s|ed|ing)?|code(?:s|d|ing)?|using|uses?|powered by|runs? on|work(?:s|ing)?\s+(?:with|in|on)|framework|stack|platform)\b[^.!?\n]{0,50}\b(?:Astro(?:\.js)?|React|Vue|Svelte|Angular)\b/i.test(value);
+  return /\b(?:build(?:s|ing)?|built|develop(?:s|ed|ing)?|code(?:s|d|ing)?|using|uses?|powered by|runs? on|work(?:s|ing)?\s+(?:with|in|on)|framework|stack|platform)\b[^.!?\n]{0,50}\b(?:Astro(?:\.js)?|React|Vue|Svelte|Angular)\b/i.test(value);
 }
 
 export function containsDisallowedExistingSiteServiceOffer(value: string) {
