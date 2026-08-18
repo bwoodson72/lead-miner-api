@@ -39,7 +39,6 @@ function parseWeights(input: unknown): PriorityWeights {
 
 function opportunityScore(decision: string | null) {
   if (decision === "rebuild_candidate") return 100;
-  if (decision === "optimization_candidate") return 82;
   if (decision === "needs_review") return 30;
   return 0;
 }
