@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   containsArtificialOutreachLanguage,
   containsConsultantJargon,
+  containsDisallowedExistingSiteServiceOffer,
   containsGenericOpening,
   containsMinimizingRemediation,
   containsPlaceholderText,
@@ -21,8 +22,8 @@ import {
   subjectNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v15", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v15");
+test("outreach prompt version is v16", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v16");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
@@ -81,6 +82,29 @@ test("outreach drafting rejects a selected finding that still requires rendered 
       },
     }, "unused-model", 0.7, "Write a concise evidence-backed email."),
     /still requires visitor-facing verification/,
+  );
+});
+
+test("initial outreach is generated only for custom rebuild candidates", async () => {
+  await assert.rejects(
+    () => generateOutreachDraft({
+      businessName: "Example Roofing",
+      domain: "example-roofing.com",
+      keyword: "roofer",
+      senderName: "Brian Woodson",
+      senderEmail: "leads@brianwoodson.dev",
+      qualificationDecision: "optimization_candidate",
+      selectedFinding: {
+        id: 1,
+        category: "performance",
+        title: "Slow homepage",
+        evidence: "Measured loading is poor.",
+        assetCapability: "The existing site could be optimized.",
+        confidence: 0.95,
+        significance: "high",
+      },
+    }, "unused-model", 0.7, "Write a concise evidence-backed email."),
+    /only generated for custom rebuild candidates/i,
   );
 });
 
@@ -165,10 +189,19 @@ test("exact performance measurements are private evidence only", () => {
   assert.equal(outreachDraftNeedsRegeneration(body, "Homepage load", "Want me to send what I found?"), true);
 });
 
-test("Touch 1 rejects meeting asks but allows tiny permission asks", () => {
+test("existing-site optimization and page-builder service offers are rejected", () => {
+  assert.equal(containsDisallowedExistingSiteServiceOffer("I can optimize the current site."), true);
+  assert.equal(containsDisallowedExistingSiteServiceOffer("Want me to fix the existing homepage?"), true);
+  assert.equal(containsDisallowedExistingSiteServiceOffer("I can tune the WordPress site."), true);
+  assert.equal(containsDisallowedExistingSiteServiceOffer("I build new custom websites for service businesses."), false);
+  assert.equal(containsDisallowedExistingSiteServiceOffer("Want me to send over what I found?"), false);
+});
+
+test("Touch 1 rejects meeting and existing-site service asks but allows tiny permission asks", () => {
   assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
   assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), true);
   assert.equal(ctaNeedsRegeneration("Could we schedule 15 minutes to look at it?"), true);
+  assert.equal(ctaNeedsRegeneration("Want me to optimize the current site?"), true);
   assert.equal(ctaNeedsRegeneration("Want me to send over what I found?"), false);
   assert.equal(ctaNeedsRegeneration("Want to see what I found?"), false);
   assert.equal(ctaNeedsRegeneration("Should I send the details?"), false);
