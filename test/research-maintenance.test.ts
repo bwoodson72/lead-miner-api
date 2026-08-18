@@ -11,7 +11,7 @@ function makePrisma(researchVersion = "lead-research-v10") {
   } as any;
 }
 
-test("stale research refresh upgrades v3-v10 research and reports invalidated unsent outreach", async () => {
+test("stale research refresh upgrades pre-v12 research and reports invalidated unsent outreach", async () => {
   const result = await refreshStaleResearch(
     makePrisma(),
     10,
@@ -23,8 +23,8 @@ test("stale research refresh upgrades v3-v10 research and reports invalidated un
     })) as any,
   );
 
-  assert.equal(result.targetResearchVersion, "lead-research-v11");
-  assert.deepEqual(result.staleResearchVersions, ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10"]);
+  assert.equal(result.targetResearchVersion, "lead-research-v12");
+  assert.deepEqual(result.staleResearchVersions, ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10", "lead-research-v11"]);
   assert.equal(result.refreshed, 1);
   assert.equal(result.failed, 0);
   assert.equal(result.invalidatedDrafts, 1);
@@ -47,12 +47,12 @@ test("stale research refresh leaves draft handling to core research when researc
   assert.match(result.results[0]?.error ?? "", /research failed/);
 });
 
-test("v11 research does not generate replacement outreach before prioritization and angle selection", async () => {
+test("v12 research does not generate replacement outreach before prioritization and angle selection", async () => {
   const result = await refreshStaleResearch(
-    makePrisma("lead-research-v10"),
+    makePrisma("lead-research-v11"),
     10,
     (async () => ({
-      result: { decision: "optimization_candidate" },
+      result: { decision: "no_material_opportunity" },
       priorityScore: null,
       draft: null,
       invalidatedDrafts: 0,
