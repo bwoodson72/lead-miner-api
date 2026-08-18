@@ -74,8 +74,8 @@ function sanitizePerformanceMeasurements(value: string | null): string | null {
   if (!value) return value;
   return value
     .replace(/\b\d+(?:\.\d+)?\s*(?:milliseconds?|ms)\b/gi, "a noticeable delay")
-    .replace(/\b(?:about|around|roughly|nearly|almost|close to|over|under)?\s*(\d+(?:\.\d+)?)\s*(?:s|seconds?|secs?)\b/gi, (_match, raw: string) => humanizeSeconds(raw))
-    .replace(/\b(?:about|around|roughly|nearly|almost|close to|over|under)?\s*(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b/gi, (_match, raw: string) => humanizeMinutes(raw))
+    .replace(/\b(?:(?:about|around|roughly|nearly|almost|close to|over|under)\s+)?(\d+(?:\.\d+)?)\s*(?:s|seconds?|secs?)\b/gi, (_match, raw: string) => humanizeSeconds(raw))
+    .replace(/\b(?:(?:about|around|roughly|nearly|almost|close to|over|under)\s+)?(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b/gi, (_match, raw: string) => humanizeMinutes(raw))
     .replace(/\b(?:performance|speed|load(?:ing)?)\s+(?:score|rating)?\s*(?:of|at|:)\s*\d+(?:\.\d+)?%?/gi, "measured site performance")
     .replace(/\s{2,}/g, " ")
     .trim();
