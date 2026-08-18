@@ -38,8 +38,7 @@ function jsonSchema() {
 }
 
 export function followUpNeedsRegeneration(value: string) {
-  return containsPlaceholderText(value)
-    || containsMinimizingRemediation(value)
+  return containsMinimizingRemediation(value)
     || containsConsultantJargon(value)
     || containsArtificialOutreachLanguage(value)
     || containsTechnicalAuditLanguage(value)
@@ -58,7 +57,7 @@ export function followUpSequenceGuidance(followUpNumber: number) {
   if (followUpNumber === 3) {
     return "This is follow-up #3. If the supplied evidence and prior thread support it, shift from the single symptom toward the broader business opportunity: the site may be underselling the business or making it harder to choose. It is okay to connect that broader problem to Brian's work building custom websites, but do not claim the whole site needs replacing unless the supplied evidence supports that conclusion. Do not mention implementation details. The CTA may test whether the broader opportunity is worth discussing, but do not push a calendar slot.";
   }
-  return "This is follow-up #4, the terminal breakup message. Close the loop respectfully. Do not introduce a new problem, a new proof point, manufactured urgency, guilt, pressure, challenge, or shame. Make clear this is the last outreach for now and leave the door open if timing changes. If the prior thread and supplied evidence support a broader rebuild opportunity, it is okay to say Brian would be happy to show what he would approach differently in a new custom website. Do not mention implementation details or imply another follow-up will occur.";
+  return "This is follow-up #4, the terminal breakup message. Close the loop respectfully. Do not introduce a new problem, a new proof point, manufactured urgency, guilt, pressure, challenge, or shame. Do not ask for a meeting, consultation, or calendar slot. Make clear this is the last outreach for now and leave the door open if timing changes. If the prior thread and supplied evidence support a broader rebuild opportunity, it is okay to say Brian would be happy to show what he would approach differently in a new custom website. Do not mention implementation details or imply another follow-up will occur.";
 }
 
 export async function generateFollowUp(input: {
@@ -125,7 +124,8 @@ export async function generateFollowUp(input: {
   const parsed = FollowUpSchema.parse(JSON.parse(raw));
   const draft: FollowUpDraft = { ...parsed, bodyText: normalizeOutreachBody(parsed.bodyText) };
   if (/^\s*(?:hi|hello|hey|dear)\b/i.test(draft.bodyText)) throw new Error("OpenAI follow-up restarted the thread with a greeting");
-  if (followUpNeedsRegeneration(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up used unsafe, technical, artificial, or remediation language");
+  if (containsPlaceholderText(`${draft.bodyText}\n${draft.angle}`)) throw new Error("OpenAI follow-up contained placeholder text or a fabricated placeholder identity");
+  if (followUpNeedsRegeneration(draft.bodyText)) throw new Error("OpenAI follow-up used unsafe, technical, artificial, or remediation language");
   if (/^\s*(?:just following up|checking in|circling back|touching base|bumping this|wanted to follow up)/i.test(draft.bodyText)) throw new Error("OpenAI follow-up used a generic follow-up opening");
   const lastLine = draft.bodyText.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
   if (lastLine?.toLowerCase() !== senderFirstName.toLowerCase()) throw new Error("OpenAI follow-up did not sign off with the sender's first name");
