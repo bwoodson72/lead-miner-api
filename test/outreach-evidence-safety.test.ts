@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   containsArtificialOutreachLanguage,
+  containsAuditDiagnosisLanguage,
   containsConsultantJargon,
   containsDisallowedExistingSiteServiceOffer,
   containsGenericOpening,
@@ -19,11 +20,12 @@ import {
   normalizeOutreachBody,
   OUTREACH_PROMPT_VERSION,
   outreachDraftNeedsRegeneration,
+  sanitizeProspectFacingEvidence,
   subjectNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v17", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v17");
+test("outreach prompt version is v18", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v18");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
@@ -174,19 +176,28 @@ test("analyst-style campaign language is rejected", () => {
   assert.equal(containsArtificialOutreachLanguage("I noticed the estimate form takes a while to show up."), false);
 });
 
+test("audit-diagnosis language is not used as the Touch 1 offer", () => {
+  assert.equal(containsAuditDiagnosisLanguage("I noted what may be contributing and where it affects the page."), true);
+  assert.equal(containsAuditDiagnosisLanguage("I can send over what I noticed."), false);
+  assert.equal(ctaNeedsRegeneration("Want me to send what may be causing it?"), true);
+});
+
 test("technical audit language is never prospect-facing", () => {
   assert.equal(containsTechnicalAuditLanguage("The page has an LCP problem in Lighthouse."), true);
   assert.equal(containsTechnicalAuditLanguage("PageSpeed shows a 7200 ms delay."), true);
   assert.equal(containsTechnicalAuditLanguage("The page takes a pretty long time to show up."), false);
 });
 
-test("exact performance measurements are private evidence only", () => {
-  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took about seven seconds to appear."), true);
-  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took 7.1 seconds to appear."), true);
+test("human-readable elapsed time is allowed while tool-like measurements stay private", () => {
+  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took about seven seconds to appear."), false);
+  assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took 7.1 seconds to appear."), false);
+  assert.equal(containsProspectFacingPerformanceMeasurement("It took close to a minute before the main content appeared."), false);
   assert.equal(containsProspectFacingPerformanceMeasurement("The page responded in 910 ms."), true);
+  assert.equal(containsProspectFacingPerformanceMeasurement("The page took 47.832 seconds to appear."), true);
   assert.equal(containsProspectFacingPerformanceMeasurement("The homepage takes noticeably longer than it should to show the main content."), false);
-  const body = "Hi,\n\nI checked the homepage and the main content took about seven seconds to appear. Someone comparing roofers may not wait around.\n\nI work in web development for service businesses, so this stood out to me.\n\nWant me to send what I found?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "Homepage load", "Want me to send what I found?"), true);
+  assert.equal(sanitizeProspectFacingEvidence("LCP was 58.4 s"), "load time was close to a minute");
+  const body = "Hi,\n\nI was looking at the CLC Roofing homepage and noticed it took close to a minute before the main content appeared. If someone is comparing a few roofers, that gives them a lot of time to try the next company instead.\n\nI build custom websites for service businesses, so this stood out to me.\n\nWant me to send over what I noticed?\n\nBrian";
+  assert.equal(outreachDraftNeedsRegeneration(body, "CLC Roofing homepage", "Want me to send over what I noticed?"), false);
 });
 
 test("existing-site optimization and page-builder service offers are rejected", () => {
