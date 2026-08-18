@@ -37,7 +37,7 @@ export const PREVIOUS_DEFAULT_OUTREACH_INSTRUCTIONS = [
   "Keep it roughly 55 to 100 words. Never invent facts, losses, metrics, urgency, recipient identity, or customer behavior. Never mention audit or performance-testing terminology.",
 ].join(" ");
 
-export const DEFAULT_OUTREACH_INSTRUCTIONS = [
+export const REBUILD_DEFAULT_OUTREACH_INSTRUCTIONS_V17 = [
   "Write Touch 1 as a short email Brian Woodson would personally type to a business owner after noticing something on their website.",
   "Brian's service is a new custom-coded website built on Astro. He does not optimize, repair, maintain, tune, or patch the prospect's existing WordPress, Wix, Elementor, or other page-builder implementation.",
   "Only custom-rebuild candidates reach this writing stage. Do not pitch the rebuild in Touch 1; the goal is to get a reply or permission to send the details, not to book a consultation or ask for a meeting yet.",
@@ -51,6 +51,82 @@ export const DEFAULT_OUTREACH_INSTRUCTIONS = [
   "Start with Hi, and end with one small, low-pressure question that makes replying easy. The CTA should ask permission to send or show what was found, not offer existing-site work. Sign Brian.",
   "Keep it roughly 55 to 100 words. Never invent facts, losses, metrics, urgency, recipient identity, or customer behavior. Never mention audit or performance-testing terminology.",
 ].join(" ");
+
+export const DEFAULT_OUTREACH_INSTRUCTIONS = `Write the initial cold email using evidence-backed CASHVERTISING-style direct-response psychology.
+
+This is Touch 1 of a five-touch outreach sequence. Its job is to make the prospect recognize one meaningful website problem, understand why it could matter to the business, and become interested enough to reply or ask to see what was found.
+
+Do not try to make every sales argument in the first email. Later follow-ups will deepen the consequence, add another perspective, reduce resistance, connect the symptom to the broader opportunity when supported, and eventually close the sequence.
+
+Start from the single evidence-backed outreach angle selected by Lead Miner. Use that finding as the specific hook, but do not assume it is necessarily the entire website opportunity.
+
+OFFER CONTEXT
+
+Only REBUILD_CANDIDATE leads reach this writing stage. Brian builds new custom websites for service businesses. He does not sell optimization, repair, maintenance, tuning, plugin work, or page-builder fixes on the prospect's existing website.
+
+Do not reduce a genuine rebuild opportunity to a small repair. At the same time, do not pitch a rebuild in Touch 1. Lead with the verified observation and earn a reply first.
+
+Never mention the framework, CMS, platform, page builder, coding approach, or implementation stack. Prospect-facing positioning is simply that Brian builds custom websites.
+
+PSYCHOLOGICAL OBJECTIVES
+
+1. SELF-INTEREST
+
+Translate the finding into something the business owner actually cares about: making the business easier to choose, protecting customer confidence, making it easier for interested people to contact the business, getting more value from traffic already reaching the site, or helping the website do a better job turning interest into calls or inquiries.
+
+2. LOSS AVERSION
+
+Where supported by the evidence, show what the current situation may put at risk. A prospect might return to Google, hesitate while comparing businesses, find another company easier to choose, or fail to reach the point where they contact the business.
+
+These are possible consequences, not established losses. Never claim the company has definitely lost customers, leads, revenue, rankings, traffic, or sales unless that fact is actually present in the evidence.
+
+3. SPECIFICITY
+
+Open with a real observation from the website research. Avoid generic openings such as your website could be better, you need a modern website, I help businesses grow, I came across your website, I wanted to reach out, or I hope you're doing well.
+
+4. MENTAL IMAGERY
+
+When appropriate, help the owner picture a believable customer situation. For example, someone comparing several roofers may decide the easier or clearer site is the easier company to contact.
+
+Keep scenarios plausible and hypothetical. Never present imagined customer behavior as known fact.
+
+5. CURIOSITY
+
+Do not explain the whole diagnosis or solution. Give enough information to make the problem meaningful, but leave enough unanswered that replying is worthwhile.
+
+Do not offer a technical diagnosis of what may be causing or contributing to the issue. The Touch 1 offer is to send or show what was noticed, not to troubleshoot the prospect's current implementation.
+
+PERFORMANCE EVIDENCE
+
+If measured elapsed time helps the owner understand the severity, it may be stated in normal human language when it is supported by the evidence. Phrases such as close to a minute, about 20 seconds, or over a minute are acceptable.
+
+Do not expose technical measurement language or tool output. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, performance scores, audit scores, milliseconds, benchmark values, crawler failures, evidence sources, Lead Miner, or AI research. Avoid overly precise decimal timing that sounds copied from a testing tool.
+
+Translate technical evidence into ordinary language a business owner immediately understands.
+
+STRUCTURE
+
+The email should normally move through: specific observation → possible business consequence → why Brian noticed it → one low-friction reply CTA.
+
+Use one finding. Do not stack unrelated problems. Do not provide implementation instructions. Do not prescribe a repair checklist. Do not offer to optimize, fix, tune, repair, speed up, or patch the existing website.
+
+Do not minimize a qualified opportunity with language such as simple cleanup, quick fix, easy change, small tweak, one primary phone, or one monitored email.
+
+STYLE
+
+Write like one businessperson who noticed something important speaking to another businessperson. Use ordinary spoken English, contractions, and simple wording.
+
+Do not sound like automated audit software, a marketing-agency template, a technical report, or generic cold-email spam. Avoid analyst and consultant terms such as customer journey, friction, prospective customers, acquisition asset, business asset, material limitation, or conversion path.
+
+Give brief natural context that Brian builds custom websites or works in web development for service businesses, but do not force the same sender sentence into every email.
+
+Start with Hi, on its own line. Do not invent a recipient name or team name. Keep the complete email roughly 55 to 100 words. Use a mundane, specific subject under nine words. Do not put performance timing in the subject.
+
+Use one small CTA whose job is to earn a reply or permission to send the details. Do not ask for a consultation, meeting, calendar slot, or call in Touch 1. Sign Brian.
+
+Do not use fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.
+
+The desired reaction is: "This might be making my business harder to choose, and it may be worth understanding what's really going on."`;
 
 export const ApprovalModeSchema = z.enum(["manual", "shadow", "auto_safe"]);
 const PriorityWeightsSchema = z.object({
@@ -116,6 +192,20 @@ async function syncDefaultSequence(prisma: PrismaClient, inputDelays: unknown) {
   });
 }
 
+function usesObsoleteOutreachInstructions(value: string) {
+  if ([
+    LEGACY_OUTREACH_INSTRUCTIONS,
+    EARLIER_DEFAULT_OUTREACH_INSTRUCTIONS,
+    PREVIOUS_DEFAULT_OUTREACH_INSTRUCTIONS,
+    REBUILD_DEFAULT_OUTREACH_INSTRUCTIONS_V17,
+  ].includes(value)) return true;
+
+  return value.includes("This is Touch 1 of a five-touch outreach sequence.")
+    && value.includes("For OPTIMIZATION_CANDIDATE leads:")
+    && value.includes("customer-acquisition asset")
+    && value.includes("The preferred objective is a reply or consultation");
+}
+
 export async function getAppSettings(prisma: PrismaClient) {
   let settings = await prisma.appSettings.upsert({
     where: { id: 1 },
@@ -125,11 +215,7 @@ export async function getAppSettings(prisma: PrismaClient) {
   const delays = normalizeFollowUpDelays(settings.followUpDelaysDays);
   const delaysChanged = JSON.stringify(settings.followUpDelaysDays) !== JSON.stringify(delays);
   const followUpInstructionsChanged = settings.followUpInstructions === LEGACY_FOLLOW_UP_INSTRUCTIONS;
-  const outreachInstructionsChanged = [
-    LEGACY_OUTREACH_INSTRUCTIONS,
-    EARLIER_DEFAULT_OUTREACH_INSTRUCTIONS,
-    PREVIOUS_DEFAULT_OUTREACH_INSTRUCTIONS,
-  ].includes(settings.outreachInstructions);
+  const outreachInstructionsChanged = usesObsoleteOutreachInstructions(settings.outreachInstructions);
 
   if (delaysChanged || followUpInstructionsChanged || outreachInstructionsChanged) {
     settings = await prisma.appSettings.update({
