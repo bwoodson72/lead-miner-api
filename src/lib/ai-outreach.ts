@@ -97,7 +97,7 @@ export function containsTechnicalAuditLanguage(value: string) {
 
 export function containsDisallowedExistingSiteServiceOffer(value: string) {
   const work = "(?:fix|repair|optimi[sz]e|tune|speed up|improve|patch)";
-  const target = "(?:the|your|this|current|existing)\\s+(?:website|site|page|homepage|implementation)";
+  const target = "(?:(?:the|your|this)(?:\\s+(?:current|existing))?|current|existing)\\s+(?:website|site|page|homepage|implementation)";
   const offeredWork = new RegExp(`\\b(?:i\\s+(?:can|could|would)|want me to|should i|can i|could i|would you like me to|do you want me to)\\s+(?:help\\s+)?${work}\\s+${target}\\b`, "i");
   return /\b(?:optimi[sz](?:e|ing|ation)|tune(?: up|ing)?|repair(?:ing)?|patch(?:ing)?|page-builder (?:fix|repair|tuning|optimization)|wordpress (?:fix|repair|optimization)|wix (?:fix|repair|optimization)|elementor (?:fix|repair|optimization))\b/i.test(value)
     || offeredWork.test(value);
