@@ -1,4 +1,5 @@
 import { SerpAdSchema, type SerpAd } from "./schemas.js";
+import { fetchSerperPlaces } from "./serper-places-client.js";
 
 export type LocalizedSearchSpec = {
   serviceQuery: string;
@@ -40,10 +41,11 @@ const SERVICE_EXPANSIONS: Array<[RegExp, string[]]> = [
     "emergency electrician", "panel upgrade", "electrical wiring",
     "generator installation",
   ]],
-  [/\b(hvac|heating|air conditioning|ac repair)\b/i, [
+  [/\b(hvac|heating|air conditioning|air conditioner|ac repair|ac replacement|furnace|heat pump)\b/i, [
     "hvac", "hvac contractor", "hvac company", "air conditioning repair",
     "ac repair", "heating repair", "furnace repair", "hvac installation",
-    "air conditioning installation", "commercial hvac", "residential hvac",
+    "air conditioning installation", "heat pump installation", "ac replacement",
+    "commercial hvac", "residential hvac",
   ]],
   [/\b(pest control|exterminator)\b/i, [
     "pest control", "exterminator", "pest control company", "termite control",
@@ -263,23 +265,9 @@ async function querySerperPlaces(
   resultKeyword: string
 ): Promise<SerpAd[]> {
   const q = `${variant} ${spec.queryLocation}`.trim();
-  const response = await fetch("https://google.serper.dev/places", {
-    method: "POST",
-    headers: {
-      "X-API-KEY": apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ q, gl: "us", hl: "en", num: 20 }),
-  });
+  const data = await fetchSerperPlaces(apiKey, q, 20);
+  if (!data) return [];
 
-  if (!response.ok) {
-    console.error(
-      `[Serper] Places error ${response.status} for ${q}: ${await response.text()}`
-    );
-    return [];
-  }
-
-  const data = (await response.json()) as Record<string, unknown>;
   const places = Array.isArray(data.places)
     ? (data.places as Record<string, unknown>[])
     : [];
