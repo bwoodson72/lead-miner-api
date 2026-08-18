@@ -81,7 +81,7 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
     if (Number.isFinite(requested) && requested > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Draft backfill is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
     const limit = capRequestedLimit(requested, SAFETY_LIMITS.bulkResearchMax, SAFETY_LIMITS.bulkResearchMax);
     try {
-      const leads = await prisma.lead.findMany({ where: { qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: limit, select: { id: true } });
+      const leads = await prisma.lead.findMany({ where: { qualificationDecision: "rebuild_candidate", email: { not: null }, status: { in: ["qualified", "ready_for_outreach"] }, outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }, orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], take: limit, select: { id: true } });
       const results: Array<{ leadId:number; success:boolean; messageId?:number; priorityScore?:number; error?:string }> = [];
       for (const lead of leads) {
         try { const prepared = await prepareLeadForOutreach(prisma, lead.id, { generateDraft: true }); results.push({ leadId: lead.id, success: true, messageId: prepared.draft?.id, priorityScore: prepared.priority.score }); }
