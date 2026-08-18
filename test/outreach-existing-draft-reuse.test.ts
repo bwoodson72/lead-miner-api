@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OUTREACH_PROMPT_VERSION } from "../src/lib/ai-outreach.js";
+import { FOLLOWUP_PROMPT_VERSION } from "../src/lib/ai-followup.js";
 import { canReuseExistingInitialOutreach } from "../src/lib/outreach-preparation.js";
+import { outreachMessageNeedsRegeneration } from "../src/lib/outreach-version.js";
 
 const safeBody = "Hi,\n\nI noticed the homepage takes roughly 11 seconds before the main content becomes usable. For someone comparing roofers, that is a long time to wait while deciding whom to contact.\n\nI build custom websites for service businesses, so this stood out to me.\n\nWant me to send over what I noticed?\n\nBrian";
 
@@ -46,4 +48,20 @@ test("sent or sending initial outreach is never replaced", () => {
       cta: null,
     }, true), true);
   }
+});
+
+test("kind-specific validator preserves a valid no-greeting follow-up", () => {
+  const body = "One reason I mentioned it is that an 11-second wait is a long time when someone is deciding which roofer to call. Happy to send the notes if useful.\n\nBrian";
+  assert.equal(FOLLOWUP_PROMPT_VERSION, "followup-v5");
+  assert.equal(outreachMessageNeedsRegeneration("followup", body, "Homepage load", ""), false);
+});
+
+test("kind-specific validator rejects follow-ups that restart the thread or use generic follow-up filler", () => {
+  assert.equal(outreachMessageNeedsRegeneration("followup", "Hi,\n\nThe 11-second wait is still worth a look.\n\nBrian"), true);
+  assert.equal(outreachMessageNeedsRegeneration("followup", "Just following up on the note I sent.\n\nBrian"), true);
+});
+
+test("kind-specific initial validation still rejects the conversation CTA", () => {
+  const body = safeBody.replace("Want me to send over what I noticed?", "Would you be open to a quick conversation about improving that experience?");
+  assert.equal(outreachMessageNeedsRegeneration("initial", body, "Homepage load", "Would you be open to a quick conversation about improving that experience?"), true);
 });
