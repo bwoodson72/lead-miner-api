@@ -4,7 +4,7 @@ import { z, ZodError } from "zod";
 import { sendApprovedQueue } from "./outreach-sending.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
-const DecisionSchema = z.enum(["rebuild_candidate", "optimization_candidate", "no_material_opportunity", "needs_review"]);
+const DecisionSchema = z.enum(["rebuild_candidate", "no_material_opportunity", "needs_review"]);
 const LifecycleSchema = z.enum(["new","enriching","research_pending","researching","research_failed","qualified","disqualified","ready_for_outreach","held","contacted","followup_due","replied","responded","interested","call_scheduled","proposal_sent","won","lost","rejected","bounced","unsubscribed","closed_no_response"]);
 const QualifySchema = z.object({ decision: DecisionSchema, reason: z.string().max(3000).optional() });
 const LeadPatchSchema = z.object({
@@ -23,7 +23,7 @@ const LeadPatchSchema = z.object({
 
 function validationError(res: any, error: ZodError) { res.status(400).json({ error: "Invalid request", issues: error.issues }); }
 function statusForDecision(decision: z.infer<typeof DecisionSchema>) {
-  if (decision === "rebuild_candidate" || decision === "optimization_candidate") return "qualified";
+  if (decision === "rebuild_candidate") return "qualified";
   if (decision === "no_material_opportunity") return "disqualified";
   return "research_pending";
 }
