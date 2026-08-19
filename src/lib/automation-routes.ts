@@ -44,15 +44,32 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
         pendingEnrichment, researchReady, qualifiedNeedsPreparation, approvedMessages, sendingMessages,
         followupsDue, revisitDue, unhandledReplies, staleResearch, sentToday, suppressedCount, recentRuns, outreachPaused, aiBudget,
       ] = await Promise.all([
-        prisma.lead.count({ where: { email: null, status: { in: ["new", "research_pending", "qualified"] }, OR: [{ emailEnrichmentStatus: "pending" }, { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } }] } }),
-        prisma.lead.count({ where: { email: { not: null }, status: { in: ["new", "research_pending"] }, lastResearchedAt: null, aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } } } }),
+        prisma.lead.count({
+          where: {
+            email: null,
+            qualificationDecision: "rebuild_candidate",
+            status: { in: ["qualified", "ready_for_outreach"] },
+            OR: [
+              { emailEnrichmentStatus: "pending" },
+              { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } },
+            ],
+          },
+        }),
+        prisma.lead.count({
+          where: {
+            status: { in: ["new", "research_pending"] },
+            lastResearchedAt: null,
+            screeningStatus: { in: ["complete", "partial", "failed"] },
+            aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
+          },
+        }),
         prisma.lead.count({ where: { qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, email: { not: null }, OR: [{ priorityScore: null }, { primaryOutreachAngle: null }, { outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }] } }),
         prisma.outreachMessage.count({ where: { status: "approved" } }),
         prisma.outreachMessage.count({ where: { status: "sending" } }),
         prisma.lead.count({ where: { status: "contacted", followUpDate: { lte: now }, OR: [{ replyStatus: null }, { replyStatus: "out_of_office" }] } }),
         prisma.lead.count({ where: { replyStatus: "not_now", revisitAt: { lte: now } } }),
         prisma.lead.count({ where: { replyStatus: { not: null }, replyHandledAt: null } }),
-        prisma.lead.count({ where: { researchVersion: { in: STALE_RESEARCH_VERSIONS }, email: { not: null } } }),
+        prisma.lead.count({ where: { researchVersion: { in: STALE_RESEARCH_VERSIONS } } }),
         prisma.outreachMessage.count({ where: { status: "sent", sentAt: { gte: startOfDay } } }),
         prisma.suppression.count({ where: { type: { in: ["email", "domain"] } } }),
         prisma.automationRun.findMany({ orderBy: { startedAt: "desc" }, take: 50 }),
@@ -75,7 +92,19 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
           dailySendLimit: settings.dailySendLimit, sendWindowStart: settings.sendWindowStart, sendWindowEnd: settings.sendWindowEnd,
           sendTimezone: settings.sendTimezone, weekendSendingEnabled: settings.weekendSendingEnabled, researchBatchSize: settings.researchBatchSize,
         },
-        queue: { pendingEnrichment, researchReady, qualifiedNeedsPreparation, approvedMessages, sendingMessages, followupsDue, revisitDue, unhandledReplies, staleResearch },
+        queue: {
+          pendingEnrichment,
+          waitingForContact: pendingEnrichment,
+          researchReady,
+          researchQueue: researchReady,
+          qualifiedNeedsPreparation,
+          approvedMessages,
+          sendingMessages,
+          followupsDue,
+          revisitDue,
+          unhandledReplies,
+          staleResearch,
+        },
         blocked: {
           outreachPaused,
           dailySendCapReached: sentToday >= settings.dailySendLimit,
@@ -131,7 +160,7 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
     if (!lease) { res.status(409).json({ error: "Automation tick already running" }); return; }
     try {
       const runs = [];
-      for (const jobName of ["sync_replies", "revisit_due", "enrich", "research", "recalculate_priorities", "prepare_outreach"] as AutomationJobName[]) runs.push(await runNamedAutomationJob(prisma, jobName));
+      for (const jobName of ["sync_replies", "revisit_due", "research", "enrich", "recalculate_priorities", "prepare_outreach"] as AutomationJobName[]) runs.push(await runNamedAutomationJob(prisma, jobName));
       if (await gmailLabelReconciliationDue(prisma)) runs.push(await runNamedAutomationJob(prisma, "sync_gmail_labels"));
       if (policy.sendAutomationEnabled && !await isOutreachPaused(prisma)) {
         for (const jobName of ["reconcile_sends", "followups", "send_approved"] as AutomationJobName[]) runs.push(await runNamedAutomationJob(prisma, jobName));
