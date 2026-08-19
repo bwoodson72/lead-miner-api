@@ -6,10 +6,8 @@ import { buildLeadRecord } from "./filters.js";
 import { type KeywordInput, type LeadRecord } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 import { isFranchise } from "./franchise-filter.js";
-import { upsertLeads, prisma, type UpsertResult } from "./db.js";
+import { upsertLeads, type UpsertResult } from "./db.js";
 import { enrichLeadFromSite } from "./enrichment.js";
-import { processLeadResearch } from "./research-routes.js";
-import { getAppSettings } from "./settings.js";
 
 type Diagnostics = {
   keywordsParsed: number;
@@ -32,13 +30,10 @@ type Diagnostics = {
   enrichmentFailures: number;
   emailsFound: number;
   phonesFound: number;
-  skippedNoEmail: number;
+  researchQueued: number;
   dbCreated: number;
   dbUpdated: number;
   dbFailed: number;
-  aiResearched: number;
-  aiResearchFailed: number;
-  draftsGenerated: number;
   messages: string[];
 };
 
@@ -72,13 +67,10 @@ function emptyDiagnostics(): Diagnostics {
     enrichmentFailures: 0,
     emailsFound: 0,
     phonesFound: 0,
-    skippedNoEmail: 0,
+    researchQueued: 0,
     dbCreated: 0,
     dbUpdated: 0,
     dbFailed: 0,
-    aiResearched: 0,
-    aiResearchFailed: 0,
-    draftsGenerated: 0,
     messages: [],
   };
 }
@@ -255,43 +247,14 @@ export async function runLeadSearchPipeline(
     diagnostics.messages.push(`Failed to persist final screening/enrichment for ${finalFailures.length} candidate(s)`);
   }
 
-  const createdIds = new Set<number>();
-  for (const result of [...initialDbResults, ...finalDbResults]) {
-    if (result.action === "created" && result.id) createdIds.add(result.id);
-  }
-
-  const settings = await getAppSettings(prisma);
-  if (settings.autoResearch) {
-    const newIds = Array.from(createdIds);
-    const researchable = newIds.length
-      ? await prisma.lead.findMany({
-          where: { id: { in: newIds }, email: { not: null } },
-          select: { id: true },
-        })
-      : [];
-    const researchableIds = new Set(researchable.map((lead) => lead.id));
-    diagnostics.skippedNoEmail += newIds.filter((id) => !researchableIds.has(id)).length;
-    if (diagnostics.skippedNoEmail) {
-      diagnostics.messages.push(`Skipped AI research for ${diagnostics.skippedNoEmail} new lead(s) with no email`);
-    }
-
-    for (let index = 0; index < researchable.length; index++) {
-      const id = researchable[index]!.id;
-      onProgress?.("researching", `AI researching ${index + 1} of ${researchable.length} contactable new leads...`);
-      try {
-        const processed = await processLeadResearch(prisma, id);
-        diagnostics.aiResearched++;
-        if (processed.draft) diagnostics.draftsGenerated++;
-      } catch (error) {
-        diagnostics.aiResearchFailed++;
-        diagnostics.messages.push(`AI research failed for lead ${id}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+  diagnostics.researchQueued = finalDbResults.filter((result) => result.action !== "failed").length;
+  if (diagnostics.researchQueued) {
+    diagnostics.messages.push(`${diagnostics.researchQueued} candidate(s) are eligible for the scored AI research queue; contactability is not required`);
   }
 
   onProgress?.(
     "complete",
-    `Done — ${leads.length} candidates saved; ${diagnostics.performanceStrong} strong performance opportunities; ${diagnostics.aiResearched} AI researched`,
+    `Done — ${leads.length} candidates saved; ${diagnostics.researchQueued} queued for AI research`,
   );
   return { leads, keywords, diagnostics };
 }
