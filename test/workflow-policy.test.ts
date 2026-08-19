@@ -3,11 +3,17 @@ import assert from "node:assert/strict";
 import { getSendIneligibilityReason, isWithinSendWindow, makeGmailRfcMessageId, makeOutreachIdempotencyKey, nextEligibleSendTime } from "../src/lib/workflow-policy.js";
 
 function eligibleLead() {
-  return { email: "owner@example.com", domain: "example.com", status: "ready_for_outreach", replyStatus: null, lastReplyAt: null, suppressions: [] as Array<{ value: string }> };
+  return { email: "owner@example.com", domain: "example.com", status: "ready_for_outreach", qualificationDecision: "rebuild_candidate", replyStatus: null, lastReplyAt: null, suppressions: [] as Array<{ value: string }> };
 }
 
 test("eligible lead is allowed to send", () => {
   assert.equal(getSendIneligibilityReason(eligibleLead()), null);
+});
+
+test("explicit non-rebuild qualification blocks sending while null legacy decisions remain allowed", () => {
+  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "no_material_opportunity" }) ?? "", /decision no_material_opportunity is not send-eligible/);
+  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "needs_review" }) ?? "", /decision needs_review is not send-eligible/);
+  assert.equal(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: null }), null);
 });
 
 test("reply state blocks all additional outreach", () => {
