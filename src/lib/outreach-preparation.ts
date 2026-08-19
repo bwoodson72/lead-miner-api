@@ -15,6 +15,13 @@ import { getContactIdentityRiskReason } from "./contact-safety.js";
 
 const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate"]);
 
+export function resolveEffectiveQualificationDecision(
+  leadDecision: string | null | undefined,
+  assessmentDecision: string,
+) {
+  return leadDecision ?? assessmentDecision;
+}
+
 async function loadOpportunity(prisma: PrismaClient, leadId: number) {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -30,12 +37,13 @@ async function loadOpportunity(prisma: PrismaClient, leadId: number) {
   if (!lead) throw new Error("Lead not found");
   const assessment = lead.assetAssessments[0];
   if (!assessment) throw new Error("Lead has no business-asset assessment");
-  if (!QUALIFIED_ASSET_DECISIONS.has(assessment.decision)) {
-    if (assessment.decision === "optimization_candidate") throw new Error("Legacy optimization candidate is not eligible for outreach; re-research this lead under the custom-rebuild qualification model");
-    throw new Error(`Lead decision ${assessment.decision} is not outreach-eligible`);
+  const qualificationDecision = resolveEffectiveQualificationDecision(lead.qualificationDecision, assessment.decision);
+  if (!QUALIFIED_ASSET_DECISIONS.has(qualificationDecision)) {
+    if (qualificationDecision === "optimization_candidate") throw new Error("Legacy optimization candidate is not eligible for outreach; re-research this lead under the custom-rebuild qualification model");
+    throw new Error(`Lead decision ${qualificationDecision} is not outreach-eligible`);
   }
   if (!lead.email) throw new Error("Lead has no email address");
-  return { lead, assessment };
+  return { lead, assessment: { ...assessment, decision: qualificationDecision } };
 }
 
 function siteMaturityRating(dimensions: unknown) {
