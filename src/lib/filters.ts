@@ -3,10 +3,6 @@ import { LeadRecordSchema, type LeadRecord, type SerpAd } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 import { buildPerformanceScreen, classifyPerformanceOpportunity, type ScreeningStatus } from "./site-screening.js";
 
-export function isSlowSite(result: PageSpeedResult, thresholds: Thresholds): boolean {
-  return classifyPerformanceOpportunity(result, thresholds) === "strong";
-}
-
 export function buildLeadRecord(params: {
   keyword: string;
   domain: string;
