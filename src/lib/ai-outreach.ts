@@ -124,11 +124,16 @@ export function containsProspectFacingImplementationStack(value: string) {
 }
 
 export function containsDisallowedExistingSiteServiceOffer(value: string) {
-  const work = "(?:fix|repair|optimi[sz]e|tune|speed up|improve|patch)";
-  const target = "(?:(?:the|your|this)(?:\\s+(?:current|existing))?|current|existing)\\s+(?:website|site|page|homepage|implementation)";
-  const offeredWork = new RegExp(`\\b(?:i\\s+(?:can|could|would)|want me to|should i|can i|could i|would you like me to|do you want me to)\\s+(?:help\\s+)?${work}\\s+${target}\\b`, "i");
-  return /\b(?:optimi[sz](?:e|ing|ation)|tune(?: up|ing)?|repair(?:ing)?|patch(?:ing)?|page-builder (?:fix|repair|tuning|optimization)|wordpress (?:fix|repair|optimization)|wix (?:fix|repair|optimization)|elementor (?:fix|repair|optimization))\b/i.test(value)
-    || offeredWork.test(value);
+  const offerPrefix = "(?:i\\s+(?:can|could|would|will)|want me to|should i|can i|could i|would you like me to|do you want me to)";
+  const existingTarget = "(?:(?:the|your|this)(?:\\s+(?:current|existing))?|current|existing)\\s+(?:website|site|page|homepage|implementation)";
+  const platformTarget = "(?:(?:the|your|this)\\s+)?(?:wordpress|wix|elementor|page-builder)\\s+(?:website|site|page|homepage|implementation)";
+  const genericTarget = "(?:websites?|sites?|pages?)";
+  const directWork = "(?:fix|repair|optimi[sz]e|tune|speed up|patch|maintain)";
+  const directOffer = new RegExp(`\\b${offerPrefix}\\s+(?:help\\s+(?:you\\s+)?(?:to\\s+)?|help\\s+with\\s+)?${directWork}\\s+(?:${existingTarget}|${platformTarget}|${genericTarget})\\b`, "i");
+  const improveExisting = new RegExp(`\\b${offerPrefix}\\s+(?:help\\s+(?:you\\s+)?(?:to\\s+)?)?improve\\s+(?:${existingTarget}|${platformTarget})\\b`, "i");
+  const serviceNoun = "(?:optimization|tuning|repairs?|maintenance|patching)";
+  const nounOffer = new RegExp(`\\b(?:i\\s+(?:offer|provide|do|handle|specialize in)|my\\s+services?\\s+(?:include|cover))\\s+(?:website\\s+|site\\s+|wordpress\\s+|wix\\s+|elementor\\s+|page-builder\\s+)?${serviceNoun}\\b`, "i");
+  return directOffer.test(value) || improveExisting.test(value) || nounOffer.test(value);
 }
 
 export function ctaNeedsRegeneration(value: string) {
@@ -244,8 +249,8 @@ function draftValidationIssues(draft: OutreachDraft, senderName: string, recentC
   if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
   if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Use rounded, human-readable elapsed time only. Remove milliseconds, benchmark-style percentages, or overly precise tool-like timing.");
   if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove framework, CMS, platform, coding-stack, or implementation details. Prospect-facing positioning is simply that Brian builds custom websites.");
-  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer optimization, repair, tuning, or page-builder work on the existing website. Brian's service is a new custom website.");
-  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, optimization, repair, or implementation diagnosis in Touch 1.");
+  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer work on the prospect's current website. If sender context is needed, say only that Brian builds new custom websites.");
+  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, or work on the current site in Touch 1.");
   if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
   if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
   if (subjectNeedsRegeneration(draft.subject)) issues.push("Use a mundane, specific subject of nine words or fewer; no hype, technical timing, or generic Quick question subject.");
