@@ -23,6 +23,7 @@ export const OUTREACH_POLICY = {
     prospectFacingPositioning: "Brian builds custom websites for service businesses",
     existingSiteWorkOffered: false,
     prohibitedExistingSiteActions: [
+      { label: "fix", pattern: "fix" },
       { label: "optimize", pattern: "optimi[sz]e" },
       { label: "repair", pattern: "repair" },
       { label: "tune", pattern: "tune" },
@@ -129,11 +130,12 @@ export function getOutreachOfferContext() {
 }
 
 export function buildHardOutreachRules() {
-  const prohibitedWork = listLabels(OUTREACH_POLICY.offer.prohibitedExistingSiteServices);
+  const prohibitedActions = listLabels(OUTREACH_POLICY.offer.prohibitedExistingSiteActions);
+  const prohibitedServices = listLabels(OUTREACH_POLICY.offer.prohibitedExistingSiteServices);
   const implementationTerms = OUTREACH_POLICY.offer.implementationTerms.join(", ");
   return [
     "Write Touch 1 as a short email Brian would personally type after noticing one real thing on a business website.",
-    `Brian's actual service is a ${OUTREACH_POLICY.offer.service} for service businesses. He does not sell ${prohibitedWork} on an existing website. Never imply that he will perform work on the prospect's current implementation.`,
+    `Brian's actual service is a ${OUTREACH_POLICY.offer.service} for service businesses. He does not offer existing-site work such as ${prohibitedActions}, or services such as ${prohibitedServices}. Never imply that he will perform work on the prospect's current implementation.`,
     "The lead reaching this stage has been qualified because a custom rebuild is a reasonable business option. Touch 1 still should not pitch the rebuild; use the verified finding to earn a reply first.",
     `The goal is only to ${OUTREACH_POLICY.touch1.objective}. Do not try to book a consultation, meeting, calendar slot, or call in this first email.`,
     "Use one verified observation and one owner stake. The persuasion should come from why the fact matters, not from sales language.",
