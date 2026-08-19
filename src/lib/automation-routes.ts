@@ -14,9 +14,19 @@ const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-r
 const RunSchema = z.object({ jobName: z.enum(AUTOMATION_JOB_NAMES) });
 const PAUSE_TYPE = "global";
 const PAUSE_VALUE = "outreach";
+const GMAIL_LABEL_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60_000;
 
 async function isOutreachPaused(prisma: PrismaClient) {
   return Boolean(await prisma.suppression.findUnique({ where: { type_value: { type: PAUSE_TYPE, value: PAUSE_VALUE } } }));
+}
+
+async function gmailLabelReconciliationDue(prisma: PrismaClient, now = new Date()) {
+  const lastRun = await prisma.automationRun.findFirst({
+    where: { jobName: "sync_gmail_labels" },
+    orderBy: { startedAt: "desc" },
+    select: { startedAt: true },
+  });
+  return !lastRun || now.getTime() - lastRun.startedAt.getTime() >= GMAIL_LABEL_RECONCILIATION_INTERVAL_MS;
 }
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
@@ -122,6 +132,7 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
     try {
       const runs = [];
       for (const jobName of ["sync_replies", "revisit_due", "enrich", "research", "recalculate_priorities", "prepare_outreach"] as AutomationJobName[]) runs.push(await runNamedAutomationJob(prisma, jobName));
+      if (await gmailLabelReconciliationDue(prisma)) runs.push(await runNamedAutomationJob(prisma, "sync_gmail_labels"));
       if (policy.sendAutomationEnabled && !await isOutreachPaused(prisma)) {
         for (const jobName of ["reconcile_sends", "followups", "send_approved"] as AutomationJobName[]) runs.push(await runNamedAutomationJob(prisma, jobName));
       }

@@ -6,10 +6,12 @@ import { enrichMissingEmails } from "./enrichment-routes.js";
 import { processResearchReadyLeads } from "./research-routes.js";
 import { processQualifiedOutreachPreparation } from "./outreach-preparation-job.js";
 import { prioritizeLead } from "./outreach-preparation.js";
+import { reconcileGmailPipelineLabels } from "./gmail-pipeline.js";
 import { SAFETY_LIMITS } from "./safety-limits.js";
 
 export const AUTOMATION_JOB_NAMES = [
   "sync_replies",
+  "sync_gmail_labels",
   "revisit_due",
   "enrich",
   "research",
@@ -77,6 +79,9 @@ export async function runNamedAutomationJob(prisma: PrismaClient, jobName: Autom
       case "sync_replies":
         if (!settings.autoSyncReplies) skippedReason = "Reply sync is disabled";
         else results = await syncReplies(prisma, SAFETY_LIMITS.automationReplySyncMax);
+        break;
+      case "sync_gmail_labels":
+        results = await reconcileGmailPipelineLabels(prisma, 500);
         break;
       case "revisit_due":
         results = await processDueRevisits(prisma, SAFETY_LIMITS.automationReplySyncMax);
