@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isResearchQueueEligible, resolveContactPipelineState } from "../src/lib/candidate-pipeline-routes.js";
+import { resolveContactPipelineState } from "../src/lib/candidate-pipeline-routes.js";
+import { isResearchQueueEligible } from "../src/lib/research-queue.js";
 
 test("research eligibility depends on screening and research state, not email", () => {
   assert.equal(isResearchQueueEligible({ status: "research_pending", lastResearchedAt: null, screeningStatus: "complete" }), true);
