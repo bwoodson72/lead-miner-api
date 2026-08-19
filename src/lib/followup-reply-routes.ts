@@ -4,6 +4,7 @@ import { generateFollowUp, FOLLOWUP_PROMPT_VERSION } from "./ai-followup.js";
 import { classifyReply, REPLY_PROMPT_VERSION } from "./ai-reply.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailThread } from "./gmail.js";
+import { syncLeadGmailPipelineLabelSafely } from "./gmail-pipeline.js";
 import { sendApprovedMessage } from "./outreach-sending.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { applyReplyAutomationStop, leadStatusForReply } from "./reply-state.js";
@@ -29,6 +30,11 @@ function referralParts(value: string | null | undefined) {
   return parts;
 }
 
+async function closeNoResponse(prisma: PrismaClient, leadId: number) {
+  await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } });
+  await syncLeadGmailPipelineLabelSafely(prisma, leadId, "no-response closure");
+}
+
 async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
   const sequence = await getActiveOutreachSequence(prisma);
@@ -52,13 +58,13 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   if (!sent.length) throw new Error("No sent initial outreach exists");
   const followupsAlreadySent = sent.filter((m) => m.kind === "followup").length;
   if (followupsAlreadySent >= FOLLOW_UP_COUNT || sent.length >= TOTAL_OUTREACH_TOUCHES) {
-    await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } });
+    await closeNoResponse(prisma, leadId);
     return null;
   }
 
   const sequenceNumber = Math.max(...sent.map((message) => message.sequenceNumber), 0) + 1;
   if (sequenceNumber > TOTAL_OUTREACH_TOUCHES) {
-    await prisma.lead.update({ where: { id: leadId }, data: { status: "closed_no_response", followUpDate: null } });
+    await closeNoResponse(prisma, leadId);
     return null;
   }
   const existing = await prisma.outreachMessage.findFirst({ where: { leadId, sequenceNumber, kind: "followup", status: { in: ["draft", "approved", "sending", "sent"] } } });
@@ -144,6 +150,7 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
       for (const referral of referrals) await tx.contact.upsert({ where: { leadId_type_value: { leadId, type: referral.type, value: referral.value } }, update: { role: "referred contact", source: "reply_referral", verificationStatus: "unverified" }, create: { leadId, type: referral.type, value: referral.value, role: "referred contact", source: "reply_referral", verificationStatus: "unverified" } });
       await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model: classified.model, inputTokens: classified.inputTokens, cachedTokens: classified.cachedTokens, outputTokens: classified.outputTokens, estimatedCost: estimateAiCost(classified.model, classified.inputTokens, classified.outputTokens), completedAt: new Date() } });
     });
+    await syncLeadGmailPipelineLabelSafely(prisma, leadId, "reply classification", { threadId });
     return classified.result;
   } catch (error) {
     await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: error instanceof Error ? error.message : String(error), completedAt: new Date() } });
