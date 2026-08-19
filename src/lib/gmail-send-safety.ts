@@ -121,6 +121,7 @@ export async function handleGmailSendingLimitDeliveryNotice(
         scheduledAt: cooldown.until,
         status: "approved",
         approvedAt: new Date(),
+        sendError: cooldown.reason,
       },
     });
     await tx.lead.update({
