@@ -1,11 +1,11 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getGmailSentUsageSince } from "./gmail.js";
+import { getAppSettings } from "./settings.js";
 import {
-  clearGmailQuotaCooldown,
-  getGmailSendPolicy,
-  setGmailQuotaCooldown,
-  type GmailSendPolicy,
-} from "./gmail-send-policy.js";
+  clearGmailQuotaCooldownState,
+  getGmailSendState,
+  setGmailQuotaCooldownState,
+} from "./gmail-send-state.js";
 
 const ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 const ROLLING_LIMIT_RECHECK_MS = 60 * 60_000;
@@ -17,6 +17,13 @@ export type GmailSendSafetyCode =
   | "minimum_send_interval"
   | "gmail_usage_unavailable";
 
+export type GmailSendSafetyPolicy = {
+  leadMinerRolling24hLimit: number;
+  gmailRolling24hSafetyLimit: number;
+  minimumSendIntervalMinutes: number;
+  gmailQuotaCooldownHours: number;
+};
+
 export type GmailSendSafetyStatus = {
   allowed: boolean;
   code: GmailSendSafetyCode | null;
@@ -26,7 +33,9 @@ export type GmailSendSafetyStatus = {
   gmailSentRolling24h: number | null;
   gmailSentCountCapped: boolean;
   latestGmailSentAt: Date | null;
-  policy: GmailSendPolicy;
+  cooldownUntil: Date | null;
+  cooldownReason: string | null;
+  policy: GmailSendSafetyPolicy;
 };
 
 export class GmailSendSafetyError extends Error {
@@ -53,11 +62,20 @@ export function isGmailAccountSendingLimitNotice(input: { from?: string | null; 
   return fromGoogleDelivery && /you have reached a limit for sending mail|user-rate limit exceeded\s*\(mail sending\)|mail sending limit/i.test(text);
 }
 
+function policyFromSettings(settings: Awaited<ReturnType<typeof getAppSettings>>): GmailSendSafetyPolicy {
+  return {
+    leadMinerRolling24hLimit: settings.dailySendLimit,
+    gmailRolling24hSafetyLimit: settings.gmailRolling24hSafetyLimit,
+    minimumSendIntervalMinutes: settings.minimumSendIntervalMinutes,
+    gmailQuotaCooldownHours: settings.gmailQuotaCooldownHours,
+  };
+}
+
 export async function startGmailQuotaCooldown(prisma: PrismaClient, reason: string, now = new Date()) {
-  const policy = await getGmailSendPolicy(prisma);
-  const until = new Date(now.getTime() + policy.gmailQuotaCooldownHours * 60 * 60_000);
+  const settings = await getAppSettings(prisma);
+  const until = new Date(now.getTime() + settings.gmailQuotaCooldownHours * 60 * 60_000);
   const cleanReason = reason.trim().slice(0, 2000) || "Gmail mail-sending limit reached";
-  await setGmailQuotaCooldown(prisma, until, cleanReason);
+  await setGmailQuotaCooldownState(prisma, until, cleanReason);
   return { until, reason: cleanReason };
 }
 
@@ -159,17 +177,18 @@ export async function handleGmailSendingLimitDeliveryNotice(
   return { classification: "gmail_sending_limit" as const, retryMessageId: retry.id, cooldownUntil: cooldown.until };
 }
 
-async function activePolicy(prisma: PrismaClient, now: Date) {
-  let policy = await getGmailSendPolicy(prisma);
-  if (policy.gmailQuotaCooldownUntil && policy.gmailQuotaCooldownUntil <= now) {
-    await clearGmailQuotaCooldown(prisma);
-    policy = await getGmailSendPolicy(prisma);
+async function activeCooldown(prisma: PrismaClient, now: Date) {
+  let state = await getGmailSendState(prisma);
+  if (state.cooldownUntil && state.cooldownUntil <= now) {
+    state = await clearGmailQuotaCooldownState(prisma);
   }
-  return policy;
+  return state;
 }
 
 function blocked(
-  policy: GmailSendPolicy,
+  policy: GmailSendSafetyPolicy,
+  cooldownUntil: Date | null,
+  cooldownReason: string | null,
   code: GmailSendSafetyCode,
   reason: string,
   retryAt: Date | null,
@@ -187,16 +206,17 @@ function blocked(
     gmailSentRolling24h,
     gmailSentCountCapped,
     latestGmailSentAt,
+    cooldownUntil,
+    cooldownReason,
     policy,
   };
 }
 
-export async function getGmailSendSafetyStatus(
-  prisma: PrismaClient,
-  settings: { dailySendLimit: number },
-  now = new Date(),
-): Promise<GmailSendSafetyStatus> {
-  const policy = await activePolicy(prisma, now);
+export async function getGmailSendSafetyStatus(prisma: PrismaClient, now = new Date()): Promise<GmailSendSafetyStatus> {
+  const [settings, state] = await Promise.all([getAppSettings(prisma), activeCooldown(prisma, now)]);
+  const policy = policyFromSettings(settings);
+  const cooldownUntil = state.cooldownUntil ?? null;
+  const cooldownReason = state.cooldownReason ?? null;
   const cutoff = new Date(now.getTime() - ROLLING_WINDOW_MS);
   const [leadMinerSentRolling24h, earliestLeadMinerSend] = await Promise.all([
     prisma.outreachMessage.count({ where: { status: "sent", sentAt: { gte: cutoff } } }),
@@ -207,12 +227,14 @@ export async function getGmailSendSafetyStatus(
     }),
   ]);
 
-  if (policy.gmailQuotaCooldownUntil && policy.gmailQuotaCooldownUntil > now) {
+  if (cooldownUntil && cooldownUntil > now) {
     return blocked(
       policy,
+      cooldownUntil,
+      cooldownReason,
       "gmail_quota_cooldown",
-      `Gmail sending is cooling down until ${policy.gmailQuotaCooldownUntil.toISOString()}: ${policy.gmailQuotaCooldownReason ?? "mail-sending limit reached"}`,
-      policy.gmailQuotaCooldownUntil,
+      `Gmail sending is cooling down until ${cooldownUntil.toISOString()}: ${cooldownReason ?? "mail-sending limit reached"}`,
+      cooldownUntil,
       leadMinerSentRolling24h,
       null,
       false,
@@ -227,6 +249,8 @@ export async function getGmailSendSafetyStatus(
     const reason = error instanceof Error ? error.message : String(error);
     return blocked(
       policy,
+      cooldownUntil,
+      cooldownReason,
       "gmail_usage_unavailable",
       `Could not verify Gmail rolling send usage: ${reason}`,
       new Date(now.getTime() + 10 * 60_000),
@@ -240,6 +264,8 @@ export async function getGmailSendSafetyStatus(
   if (gmailUsage.count >= policy.gmailRolling24hSafetyLimit) {
     return blocked(
       policy,
+      cooldownUntil,
+      cooldownReason,
       "gmail_rolling_limit",
       `Authenticated Gmail mailbox has sent at least ${gmailUsage.count} messages in the rolling 24-hour window; safety limit is ${policy.gmailRolling24hSafetyLimit}`,
       new Date(now.getTime() + ROLLING_LIMIT_RECHECK_MS),
@@ -250,14 +276,16 @@ export async function getGmailSendSafetyStatus(
     );
   }
 
-  if (leadMinerSentRolling24h >= settings.dailySendLimit) {
+  if (leadMinerSentRolling24h >= policy.leadMinerRolling24hLimit) {
     const retryAt = earliestLeadMinerSend?.sentAt
       ? new Date(earliestLeadMinerSend.sentAt.getTime() + ROLLING_WINDOW_MS)
       : new Date(now.getTime() + ROLLING_LIMIT_RECHECK_MS);
     return blocked(
       policy,
+      cooldownUntil,
+      cooldownReason,
       "lead_miner_rolling_limit",
-      `Lead Miner rolling 24-hour send limit reached (${settings.dailySendLimit})`,
+      `Lead Miner rolling 24-hour send limit reached (${policy.leadMinerRolling24hLimit})`,
       retryAt,
       leadMinerSentRolling24h,
       gmailUsage.count,
@@ -271,6 +299,8 @@ export async function getGmailSendSafetyStatus(
     if (nextAllowedAt > now) {
       return blocked(
         policy,
+        cooldownUntil,
+        cooldownReason,
         "minimum_send_interval",
         `Waiting for the ${policy.minimumSendIntervalMinutes}-minute mailbox send interval`,
         nextAllowedAt,
@@ -291,16 +321,14 @@ export async function getGmailSendSafetyStatus(
     gmailSentRolling24h: gmailUsage.count,
     gmailSentCountCapped: gmailUsage.capped,
     latestGmailSentAt: gmailUsage.latestSentAt,
+    cooldownUntil,
+    cooldownReason,
     policy,
   };
 }
 
-export async function assertGmailSendAllowed(
-  prisma: PrismaClient,
-  settings: { dailySendLimit: number },
-  now = new Date(),
-) {
-  const status = await getGmailSendSafetyStatus(prisma, settings, now);
+export async function assertGmailSendAllowed(prisma: PrismaClient, now = new Date()) {
+  const status = await getGmailSendSafetyStatus(prisma, now);
   if (!status.allowed) {
     throw new GmailSendSafetyError(status.reason ?? "Gmail sending is temporarily blocked", status.code!, status.retryAt);
   }
