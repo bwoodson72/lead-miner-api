@@ -3,7 +3,7 @@ import { getAppSettings } from "./settings.js";
 import { processDueFollowUps, syncReplies } from "./followup-reply-routes.js";
 import { reconcileStaleSends, sendApprovedQueue } from "./outreach-sending.js";
 import { enrichMissingEmails } from "./enrichment-routes.js";
-import { processResearchReadyLeads } from "./research-routes.js";
+import { processScoredResearchQueue } from "./research-queue-worker.js";
 import { processQualifiedOutreachPreparation } from "./outreach-preparation-job.js";
 import { prioritizeLead } from "./outreach-preparation.js";
 import { reconcileGmailPipelineLabels } from "./gmail-pipeline.js";
@@ -92,7 +92,7 @@ export async function runNamedAutomationJob(prisma: PrismaClient, jobName: Autom
         break;
       case "research":
         if (!settings.autoResearch) skippedReason = "Automatic research is disabled";
-        else results = await processResearchReadyLeads(prisma, Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax));
+        else results = await processScoredResearchQueue(prisma, Math.min(settings.researchBatchSize, SAFETY_LIMITS.automationResearchMax));
         break;
       case "recalculate_priorities":
         if (!settings.autoPrioritize) skippedReason = "Automatic prioritization is disabled";
