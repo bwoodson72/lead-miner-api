@@ -87,7 +87,8 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
     const reusable = await reusableResearch(prisma, lead, settings, preparation);
     if (reusable) {
       if (!settings.autoPrioritize) return reusable;
-      const priorityScore = await refreshPriorityAfterResearch(prisma, leadId, reusable.result.decision, true);
+      const effectiveDecision = lead.qualificationDecision ?? reusable.result.decision;
+      const priorityScore = await refreshPriorityAfterResearch(prisma, leadId, effectiveDecision, true);
       return { ...reusable, priorityScore };
     }
     await assertAiBudgetAvailable(prisma, settings);
