@@ -68,8 +68,8 @@ export type ResearchLead = {
   landingPageUrl: string;
   keyword: string;
   adSource: string;
-  lighthouseScore: number;
-  lcp: number;
+  lighthouseScore: number | null;
+  lcp: number | null;
   cls: number | null;
   tbt: number | null;
   email: string | null;
