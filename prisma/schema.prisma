@@ -110,8 +110,8 @@ model OutreachSequence {
   delaysDays Json @map("delays_days")
   maxTouches Int @map("max_touches")
   isActive Boolean @default(false) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   @@index([isActive])
   @@map("outreach_sequences")
 }
@@ -125,8 +125,8 @@ model EmailThread {
   status String @default("open")
   lastOutboundAt DateTime? @map("last_outbound_at")
   lastInboundAt DateTime? @map("last_inbound_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, provider])
   @@index([status, lastInboundAt])
@@ -143,7 +143,7 @@ model LeadProblem {
   recommendedImprovement String? @map("recommended_improvement")
   confidence Float
   outreachValue String @map("outreach_value")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId])
   @@map("lead_problems")
@@ -161,7 +161,7 @@ model LeadScore {
   compositeScore Int @map("composite_score")
   model String
   researchVersion String @map("research_version")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, createdAt])
   @@map("lead_scores")
@@ -173,7 +173,7 @@ model Activity {
   type String
   summary String
   metadata Json @default("{}")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, createdAt])
   @@map("activities")
@@ -217,7 +217,7 @@ model Suppression {
   value String
   type String
   reason String
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead? @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@unique([type, value])
   @@index([leadId])
@@ -239,7 +239,7 @@ model AIJob {
   error String?
   startedAt DateTime? @map("started_at")
   completedAt DateTime? @map("completed_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   @@index([leadId, createdAt])
   @@index([leadId, type, packetHash])
@@ -260,7 +260,7 @@ model LeadAssetAssessment {
   confidence Float
   model String
   researchVersion String @map("research_version")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   findings LeadFinding[]
   @@index([leadId, createdAt])
@@ -278,7 +278,7 @@ model LeadFinding {
   confidence Float
   significance String
   evidenceSources Json @map("evidence_sources")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   assessment LeadAssetAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
   @@index([assessmentId])
   @@index([category, significance])
@@ -289,8 +289,8 @@ model AutomationLock {
   name String @id
   token String
   expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   @@index([expiresAt])
   @@map("automation_locks")
 }
@@ -306,7 +306,7 @@ model AutomationRun {
   metadata Json @default("{}")
   startedAt DateTime @default(now()) @map("started_at")
   finishedAt DateTime? @map("finished_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now())
   @@index([jobName, startedAt])
   @@index([status, startedAt])
   @@map("automation_runs")
@@ -335,6 +335,9 @@ model AppSettings {
   dailyAiSpendLimit Float @default(5) @map("daily_ai_spend_limit")
   monthlyAiSpendLimit Float @default(100) @map("monthly_ai_spend_limit")
   dailySendLimit Int @default(40) @map("daily_send_limit")
+  gmailRolling24hSafetyLimit Int @default(100) @map("gmail_rolling_24h_safety_limit")
+  minimumSendIntervalMinutes Int @default(10) @map("minimum_send_interval_minutes")
+  gmailQuotaCooldownHours Int @default(24) @map("gmail_quota_cooldown_hours")
   sendWindowStart String @default("09:00") @map("send_window_start")
   sendWindowEnd String @default("16:30") @map("send_window_end")
   sendTimezone String @default("America/Chicago") @map("send_timezone")
@@ -347,7 +350,15 @@ model AppSettings {
   replyInstructions String @default("Classify the prospect reply by intent using only the message content and thread context. Distinguish interested, question, objection, not_now, not_interested, wrong_person, referral, out_of_office, bounce, unsubscribe, spam_or_scam, booking_intent, and other. Summarize what the prospect wants, extract any return date/referral/question when present, recommend the next human action, and provide a concise suggested response only when human review is appropriate.") @map("reply_instructions") @db.Text
   researchInstructions String @default("Evaluate the supplied website as an observable business asset for the business it represents. Assess performance effectiveness, demand alignment, business representation, customer-action capability, acquisition readiness, and site maturity. Determine whether the evidence supports a rebuild candidate, optimization candidate, no material opportunity, or needs review. Do not manufacture deficiencies or choose an outreach angle.") @map("research_instructions") @db.Text
   outreachInstructions String @default("Write a concise personalized cold email about one specific evidence-backed business problem. Use plain business language, one CTA, and no invented facts or metrics. Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit scores, performance scores, milliseconds, or benchmark terminology.") @map("outreach_instructions") @db.Text
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   @@map("app_settings")
+}
+
+model GmailSendState {
+  id Int @id @default(1)
+  cooldownUntil DateTime? @map("cooldown_until")
+  cooldownReason String? @map("cooldown_reason") @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("gmail_send_state")
 }
