@@ -16,6 +16,13 @@ export async function refreshLeadPriorityForDecision(
   }
 
   if (!enabled) return null;
+
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { email: true } });
+  if (!lead?.email) {
+    await prisma.lead.update({ where: { id: leadId }, data: { priorityScore: null, priorityBreakdown: {} } });
+    return null;
+  }
+
   const priority = await calculator(prisma, leadId);
   return priority.score;
 }

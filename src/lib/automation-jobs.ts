@@ -2,7 +2,7 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { getAppSettings } from "./settings.js";
 import { processDueFollowUps, syncReplies } from "./followup-reply-routes.js";
 import { reconcileStaleSends, sendApprovedQueue } from "./outreach-sending.js";
-import { enrichMissingEmails } from "./enrichment-routes.js";
+import { enrichQualifiedRebuildCandidates } from "./qualified-enrichment.js";
 import { processScoredResearchQueue } from "./research-queue-worker.js";
 import { processQualifiedOutreachPreparation } from "./outreach-preparation-job.js";
 import { prioritizeLead } from "./outreach-preparation.js";
@@ -88,7 +88,7 @@ export async function runNamedAutomationJob(prisma: PrismaClient, jobName: Autom
         break;
       case "enrich":
         if (!settings.autoEnrich) skippedReason = "Automatic enrichment is disabled";
-        else results = await enrichMissingEmails(prisma, SAFETY_LIMITS.automationEnrichmentMax);
+        else results = await enrichQualifiedRebuildCandidates(prisma, SAFETY_LIMITS.automationEnrichmentMax);
         break;
       case "research":
         if (!settings.autoResearch) skippedReason = "Automatic research is disabled";
