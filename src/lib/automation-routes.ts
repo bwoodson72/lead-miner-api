@@ -9,7 +9,11 @@ import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-p
 import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
 import { AUTOMATION_JOB_NAMES, runNamedAutomationJob, type AutomationJobName } from "./automation-jobs.js";
 import { getAiBudgetStatus } from "./ai-budget.js";
-import { registerCandidatePipelineRoutes } from "./candidate-pipeline-routes.js";
+import {
+  qualifiedContactEnrichmentDueWhere,
+  registerCandidatePipelineRoutes,
+  researchQueueWhere,
+} from "./candidate-pipeline-routes.js";
 
 const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10"];
 const RunSchema = z.object({ jobName: z.enum(AUTOMATION_JOB_NAMES) });
@@ -46,26 +50,9 @@ export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
         pendingEnrichment, researchReady, qualifiedNeedsPreparation, approvedMessages, sendingMessages,
         followupsDue, revisitDue, unhandledReplies, staleResearch, sentToday, suppressedCount, recentRuns, outreachPaused, aiBudget,
       ] = await Promise.all([
-        prisma.lead.count({
-          where: {
-            email: null,
-            qualificationDecision: "rebuild_candidate",
-            status: { in: ["qualified", "ready_for_outreach"] },
-            OR: [
-              { emailEnrichmentStatus: "pending" },
-              { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } },
-            ],
-          },
-        }),
-        prisma.lead.count({
-          where: {
-            status: { in: ["new", "research_pending"] },
-            lastResearchedAt: null,
-            screeningStatus: { in: ["complete", "partial", "failed"] },
-            aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
-          },
-        }),
-        prisma.lead.count({ where: { qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, email: { not: null }, OR: [{ priorityScore: null }, { primaryOutreachAngle: null }, { outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }] } }),
+        prisma.lead.count({ where: qualifiedContactEnrichmentDueWhere(now) as any }),
+        prisma.lead.count({ where: researchQueueWhere() as any }),
+        prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: { not: null }, OR: [{ priorityScore: null }, { primaryOutreachAngle: null }, { outreachMessages: { none: { kind: "initial", sequenceNumber: 1, status: { in: ["draft", "approved", "sending", "sent"] } } } }] } }),
         prisma.outreachMessage.count({ where: { status: "approved" } }),
         prisma.outreachMessage.count({ where: { status: "sending" } }),
         prisma.lead.count({ where: { status: "contacted", followUpDate: { lte: now }, OR: [{ replyStatus: null }, { replyStatus: "out_of_office" }] } }),
