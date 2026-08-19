@@ -10,8 +10,9 @@ test("automation researches before qualified contact enrichment", async () => {
 
 test("automation research queue does not require an email", async () => {
   const source = await readFile(new URL("../src/lib/automation-routes.ts", import.meta.url), "utf8");
-  const researchBlock = source.match(/researchReady[\s\S]{0,1800}?qualifiedNeedsPreparation/);
-  assert.ok(researchBlock);
-  assert.doesNotMatch(researchBlock[0], /email:\s*\{\s*not:\s*null/);
-  assert.match(researchBlock[0], /screeningStatus:\s*\{\s*in:\s*\["complete", "partial", "failed"\]/);
+  const researchQuery = source.match(
+    /prisma\.lead\.count\(\{\s*where:\s*\{\s*status:\s*\{\s*in:\s*\["new", "research_pending"\][\s\S]{0,900}?screeningStatus:\s*\{\s*in:\s*\["complete", "partial", "failed"\][\s\S]{0,900}?aiJobs:/,
+  );
+  assert.ok(researchQuery, "automation status must count the screening-aware research queue");
+  assert.doesNotMatch(researchQuery[0], /email:\s*\{\s*not:\s*null/);
 });
