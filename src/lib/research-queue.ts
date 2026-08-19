@@ -1,5 +1,3 @@
-import type { PrismaClient } from "../generated/prisma/client.js";
-
 export type ResearchQueueBreakdown = {
   acquisitionIntent: number;
   performanceSignal: number;
@@ -11,6 +9,7 @@ export type ResearchQueueBreakdown = {
 };
 
 export type ResearchQueueCandidate = {
+  id?: number;
   adSource: string;
   performanceOpportunity: string;
   screeningStatus: string;
@@ -18,7 +17,6 @@ export type ResearchQueueCandidate = {
   phone: string | null;
   address: string | null;
   createdAt: Date;
-  researchQueuedAt?: Date | null;
 };
 
 function acquisitionIntentScore(adSource: string) {
@@ -49,8 +47,7 @@ export function calculateResearchQueueScore(
   candidate: ResearchQueueCandidate,
   now = new Date(),
 ): ResearchQueueBreakdown {
-  const queuedAt = candidate.researchQueuedAt ?? candidate.createdAt;
-  const ageMs = Math.max(0, now.getTime() - queuedAt.getTime());
+  const ageMs = Math.max(0, now.getTime() - candidate.createdAt.getTime());
   const ageDays = Math.floor(ageMs / 86_400_000);
   const aging = Math.min(20, ageDays);
   const acquisitionIntent = acquisitionIntentScore(candidate.adSource);
@@ -70,47 +67,16 @@ export function calculateResearchQueueScore(
   };
 }
 
-export async function refreshResearchQueueScores(
-  prisma: PrismaClient,
-  options: { leadIds?: number[]; now?: Date; limit?: number } = {},
+export function rankResearchCandidates<T extends ResearchQueueCandidate>(
+  candidates: T[],
+  now = new Date(),
 ) {
-  const now = options.now ?? new Date();
-  const leadIds = options.leadIds?.length ? Array.from(new Set(options.leadIds)) : null;
-  const leads = await prisma.lead.findMany({
-    where: {
-      ...(leadIds ? { id: { in: leadIds } } : {}),
-      status: { in: ["new", "research_pending"] },
-      lastResearchedAt: null,
-      screeningStatus: { in: ["complete", "partial", "failed"] },
-      aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
-    },
-    orderBy: { researchQueuedAt: "asc" },
-    take: options.limit ?? 2000,
-    select: {
-      id: true,
-      adSource: true,
-      performanceOpportunity: true,
-      screeningStatus: true,
-      businessName: true,
-      phone: true,
-      address: true,
-      createdAt: true,
-      researchQueuedAt: true,
-    },
-  });
-
-  const results: Array<{ leadId: number; score: number; breakdown: ResearchQueueBreakdown }> = [];
-  for (const lead of leads) {
-    const breakdown = calculateResearchQueueScore(lead, now);
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: {
-        researchQueueScore: breakdown.total,
-        researchQueueBreakdown: breakdown,
-        researchQueueScoredAt: now,
-      },
+  return candidates
+    .map((candidate) => ({ candidate, score: calculateResearchQueueScore(candidate, now) }))
+    .sort((a, b) => {
+      if (b.score.total !== a.score.total) return b.score.total - a.score.total;
+      const createdDelta = a.candidate.createdAt.getTime() - b.candidate.createdAt.getTime();
+      if (createdDelta !== 0) return createdDelta;
+      return (a.candidate.id ?? 0) - (b.candidate.id ?? 0);
     });
-    results.push({ leadId: lead.id, score: breakdown.total, breakdown });
-  }
-  return results;
 }
