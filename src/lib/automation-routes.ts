@@ -9,6 +9,7 @@ import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-p
 import { registerResearchMaintenanceRoutes } from "./research-maintenance-routes.js";
 import { AUTOMATION_JOB_NAMES, runNamedAutomationJob, type AutomationJobName } from "./automation-jobs.js";
 import { getAiBudgetStatus } from "./ai-budget.js";
+import { registerCandidatePipelineRoutes } from "./candidate-pipeline-routes.js";
 
 const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10"];
 const RunSchema = z.object({ jobName: z.enum(AUTOMATION_JOB_NAMES) });
@@ -31,6 +32,7 @@ async function gmailLabelReconciliationDue(prisma: PrismaClient, now = new Date(
 
 export function registerAutomationRoutes(app: Express, prisma: PrismaClient) {
   registerResearchMaintenanceRoutes(app, prisma);
+  registerCandidatePipelineRoutes(app, prisma);
 
   app.get("/api/automation/status", async (req, res) => {
     const auth = authorizeCronRequest(req.headers.authorization);
