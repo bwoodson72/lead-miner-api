@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateResearchQueueScore } from "../src/lib/research-queue.js";
+import { calculateResearchQueueScore, rankResearchCandidates } from "../src/lib/research-queue.js";
 
 const now = new Date("2026-08-19T12:00:00Z");
 
@@ -13,7 +13,6 @@ function candidate(overrides: Partial<Parameters<typeof calculateResearchQueueSc
     phone: null,
     address: null,
     createdAt: new Date("2026-08-19T12:00:00Z"),
-    researchQueuedAt: new Date("2026-08-19T12:00:00Z"),
     ...overrides,
   };
 }
@@ -41,8 +40,8 @@ test("email availability is intentionally absent from research queue scoring", (
 });
 
 test("queue aging is one point per day and capped at twenty points", () => {
-  const tenDays = calculateResearchQueueScore(candidate({ researchQueuedAt: new Date("2026-08-09T12:00:00Z") }), now);
-  const fortyDays = calculateResearchQueueScore(candidate({ researchQueuedAt: new Date("2026-07-10T12:00:00Z") }), now);
+  const tenDays = calculateResearchQueueScore(candidate({ createdAt: new Date("2026-08-09T12:00:00Z") }), now);
+  const fortyDays = calculateResearchQueueScore(candidate({ createdAt: new Date("2026-07-10T12:00:00Z") }), now);
   assert.equal(tenDays.aging, 10);
   assert.equal(fortyDays.aging, 20);
 });
@@ -54,4 +53,13 @@ test("partial or failed screening remains research-eligible but receives less co
   assert.equal(complete.screeningCompleteness, 10);
   assert.equal(partial.screeningCompleteness, 5);
   assert.equal(failed.screeningCompleteness, 3);
+});
+
+test("research candidates are ranked by score then oldest candidate", () => {
+  const ranked = rankResearchCandidates([
+    candidate({ id: 2, adSource: "local_organic", createdAt: new Date("2026-08-18T12:00:00Z") }),
+    candidate({ id: 1, adSource: "paid_ad" }),
+    candidate({ id: 3, adSource: "local_organic", createdAt: new Date("2026-08-17T12:00:00Z") }),
+  ], now);
+  assert.deepEqual(ranked.map((entry) => entry.candidate.id), [1, 3, 2]);
 });
