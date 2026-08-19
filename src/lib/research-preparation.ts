@@ -1,6 +1,12 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 
-export type ResearchPreparationStatus = "ready" | "missing";
+export type ResearchPreparationStatus =
+  | "ready"
+  | "missing"
+  | "email_found"
+  | "exhausted"
+  | "deferred"
+  | "failed";
 
 export type ResearchPreparationResult = {
   leadId: number;
@@ -26,8 +32,9 @@ export class ResearchPreparationError extends Error {
  * to exist before AI research begins. Contact discovery belongs after website
  * qualification, where it cannot suppress otherwise valuable candidates.
  *
- * Legacy optional arguments remain accepted so older callers cannot accidentally
- * reintroduce email enrichment by passing the previous preparation dependencies.
+ * Legacy status values and optional arguments remain part of the public type so
+ * older route code remains source-compatible. This implementation emits only
+ * "ready" or "missing" and never invokes contact enrichment.
  */
 export async function prepareLeadForResearch(
   prisma: PrismaClient,
