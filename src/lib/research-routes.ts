@@ -12,6 +12,7 @@ import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { fetchBusinessAssetResearchPacket } from "./research-site-v10.js";
 import { assessPerformance } from "./performance-assessment.js";
 import { prepareLeadForOutreach } from "./outreach-preparation.js";
+import { refreshLeadPriorityForDecision } from "./priority-refresh.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -34,6 +35,17 @@ function lifecycleStatusForDecision(decision: string, currentStatus: string) {
 
 function researchPacketHash(lead: any, performanceAssessment: unknown, website: unknown, settings: any) {
   return hashAiPacket({ researchVersion: RESEARCH_VERSION, model: settings.researchModel, instructions: settings.researchInstructions, lead: { businessName: lead.businessName, domain: lead.domain, landingPageUrl: lead.landingPageUrl, keyword: lead.keyword, adSource: lead.adSource, lighthouseScore: lead.lighthouseScore, lcp: lead.lcp, cls: lead.cls, tbt: lead.tbt, email: lead.email, phone: lead.phone, address: lead.address, enrichmentNotes: lead.enrichmentNotes, isAgencyManaged: lead.isAgencyManaged, agencyName: lead.agencyName, isNationalChain: lead.isNationalChain, chainReason: lead.chainReason }, performanceAssessment, website });
+}
+
+async function refreshPriorityAfterResearch(prisma: PrismaClient, leadId: number, decision: string, autoPrioritize: boolean) {
+  if (!autoPrioritize) return null;
+  try {
+    return await refreshLeadPriorityForDecision(prisma, leadId, decision);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.activity.create({ data: { leadId, type: "priority_calculation_failed", summary: `Priority calculation failed after research: ${message}`, metadata: { decision } } }).catch(() => undefined);
+    return null;
+  }
 }
 
 async function reusableResearch(prisma: PrismaClient, lead: any, settings: any, preparation: ResearchPreparationResult) {
@@ -73,7 +85,12 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
     const { lead, preparation } = await getPreparedLeadForResearch(prisma, leadId);
     const settings = await getAppSettings(prisma);
     const reusable = await reusableResearch(prisma, lead, settings, preparation);
-    if (reusable) return reusable;
+    if (reusable) {
+      if (!settings.autoPrioritize) return reusable;
+      const effectiveDecision = lead.qualificationDecision ?? reusable.result.decision;
+      const priorityScore = await refreshPriorityAfterResearch(prisma, leadId, effectiveDecision, true);
+      return { ...reusable, priorityScore };
+    }
     await assertAiBudgetAvailable(prisma, settings);
     const job = await prisma.aIJob.create({ data: { leadId, type: "lead_research", status: "running", model: settings.researchModel, promptVersion: RESEARCH_VERSION, startedAt: new Date() } });
     try {
@@ -91,7 +108,8 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
         await tx.aIJob.update({ where: { id: job.id }, data: { status: "complete", model, packetHash, inputTokens, outputTokens, estimatedCost: estimateAiCost(model, inputTokens, outputTokens), completedAt: new Date() } });
       });
       const invalidatedDrafts = await invalidateUnsentInitialOutreach(prisma, leadId);
-      return { result, priorityScore: null, draft: null, preparation, invalidatedDrafts, assessmentId, reused: false, packetHash };
+      const priorityScore = await refreshPriorityAfterResearch(prisma, leadId, result.decision, settings.autoPrioritize);
+      return { result, priorityScore, draft: null, preparation, invalidatedDrafts, assessmentId, reused: false, packetHash };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
