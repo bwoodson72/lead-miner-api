@@ -2,9 +2,24 @@ import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
 import {
+  buildHardOutreachRules,
+  containsDisallowedExistingSiteServiceOffer,
+  containsProhibitedSubjectLanguage,
+  containsProhibitedTouch1Ask,
+  containsProspectFacingImplementationStack,
+  getOutreachOfferContext,
+  OUTREACH_POLICY,
+  OUTREACH_VALIDATION_MESSAGES,
+} from "./outreach-policy.js";
+import {
   containsUnsupportedFormAbsenceClaim,
   containsUnverifiedVisitorVisibility,
 } from "./research-evidence-safety.js";
+
+export {
+  containsDisallowedExistingSiteServiceOffer,
+  containsProspectFacingImplementationStack,
+} from "./outreach-policy.js";
 
 const PsychologicalLeverSchema = z.enum([
   "loss_aversion",
@@ -117,26 +132,12 @@ export function containsTechnicalAuditLanguage(value: string) {
   return /\b(?:Lighthouse|PageSpeed(?: Insights)?|Core Web Vitals?|LCP|CLS|TBT|performance score|audit score|crawler|crawl result|evidence source|milliseconds?|\d+(?:\.\d+)?\s*ms)\b/i.test(value);
 }
 
-export function containsProspectFacingImplementationStack(value: string) {
-  if (/\b(?:WordPress|Wix|Elementor|Webflow|Squarespace|Shopify|Drupal|Joomla|Next(?:\.?js)|React\.js|Vue\.js|SvelteKit|Gatsby|Nuxt(?:\.js)?|Tailwind(?: CSS)?|Node\.js|Express\.js|PHP|headless CMS|static site generator|Jamstack)\b/i.test(value)) return true;
-  if (/\b(?:custom-coded|hand-coded|tech stack|technology stack|implementation stack)\b/i.test(value)) return true;
-  return /\b(?:build(?:s|ing)?|built|develop(?:s|ed|ing)?|code(?:s|d|ing)?|using|uses?|powered by|runs? on|work(?:s|ing)?\s+(?:with|in|on)|framework|stack|platform)\b[^.!?\n]{0,50}\b(?:Astro(?:\.js)?|React|Vue|Svelte|Angular)\b/i.test(value);
-}
-
-export function containsDisallowedExistingSiteServiceOffer(value: string) {
-  const work = "(?:fix|repair|optimi[sz]e|tune|speed up|improve|patch)";
-  const target = "(?:(?:the|your|this)(?:\\s+(?:current|existing))?|current|existing)\\s+(?:website|site|page|homepage|implementation)";
-  const offeredWork = new RegExp(`\\b(?:i\\s+(?:can|could|would)|want me to|should i|can i|could i|would you like me to|do you want me to)\\s+(?:help\\s+)?${work}\\s+${target}\\b`, "i");
-  return /\b(?:optimi[sz](?:e|ing|ation)|tune(?: up|ing)?|repair(?:ing)?|patch(?:ing)?|page-builder (?:fix|repair|tuning|optimization)|wordpress (?:fix|repair|optimization)|wix (?:fix|repair|optimization)|elementor (?:fix|repair|optimization))\b/i.test(value)
-    || offeredWork.test(value);
-}
-
 export function ctaNeedsRegeneration(value: string) {
   const cta = value.trim();
   if (!cta) return true;
   if (!/\?\s*$/.test(cta)) return true;
   if (/^(?:invite|ask|suggest|offer|propose|encourage)\b/i.test(cta)) return true;
-  if (/\b(?:consultation|meeting|schedule|calendar|book|15 minutes|10 minutes|20 minutes|quick call|brief call|conversation)\b/i.test(cta)) return true;
+  if (containsProhibitedTouch1Ask(cta)) return true;
   if (/^(?:a\s+)?brief consultation\b/i.test(cta)) return true;
   if (containsConsultantJargon(cta) || containsArtificialOutreachLanguage(cta) || containsAuditDiagnosisLanguage(cta) || containsTechnicalAuditLanguage(cta) || containsProspectFacingPerformanceMeasurement(cta) || containsProspectFacingImplementationStack(cta) || containsDisallowedExistingSiteServiceOffer(cta)) return true;
   return false;
@@ -165,8 +166,8 @@ export function ctaTooSimilarToRecent(value: string, recentCtas: string[]) {
 export function subjectNeedsRegeneration(value: string) {
   const subject = value.trim();
   if (!subject) return true;
-  if (subject.split(/\s+/).length > 9) return true;
-  if (/\b(?:free audit|website audit|urgent|act now|limited time|quick question|proposal|opportunity)\b/i.test(subject)) return true;
+  if (subject.split(/\s+/).length > OUTREACH_POLICY.touch1.subjectMaxWords) return true;
+  if (containsProhibitedSubjectLanguage(subject)) return true;
   if (/[!]{1,}/.test(subject)) return true;
   if (HUMAN_DURATION_RE.test(subject)) return true;
   if (containsProspectFacingPerformanceMeasurement(subject)) return true;
@@ -232,25 +233,25 @@ function endsWithSenderFirstName(bodyText: string, senderName: string) {
 
 function draftValidationIssues(draft: OutreachDraft, senderName: string, recentCtas: string[]) {
   const issues: string[] = [];
-  if (!hasNeutralGreeting(draft.bodyText)) issues.push("Start exactly with Hi, on its own line.");
+  if (!hasNeutralGreeting(draft.bodyText)) issues.push(`Start exactly with ${OUTREACH_POLICY.touch1.greeting} on its own line.`);
   if (hasUnverifiedSalutation(draft.bodyText)) issues.push("Do not invent a recipient name, owner name, or team greeting.");
   if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove placeholder or fabricated identity text.");
   if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) issues.push("Open with the specific observation, not generic cold-email filler.");
-  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push("Give brief natural context that the sender builds custom websites or works in web development for service businesses; do not force a canned bio sentence.");
+  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push(OUTREACH_VALIDATION_MESSAGES.senderIdentity);
   if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
   if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
   if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
   if (containsAuditDiagnosisLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Offer the observation or details, not a technical diagnosis of what may be causing or contributing to the issue.");
   if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
   if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Use rounded, human-readable elapsed time only. Remove milliseconds, benchmark-style percentages, or overly precise tool-like timing.");
-  if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove framework, CMS, platform, coding-stack, or implementation details. Prospect-facing positioning is simply that Brian builds custom websites.");
-  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push("Do not offer optimization, repair, tuning, or page-builder work on the existing website. Brian's service is a new custom website.");
-  if (ctaNeedsRegeneration(draft.cta)) issues.push("Use one tiny reply/permission question; do not ask for a meeting, call, consultation, booking, optimization, repair, or implementation diagnosis in Touch 1.");
+  if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push(OUTREACH_VALIDATION_MESSAGES.implementationStack);
+  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push(OUTREACH_VALIDATION_MESSAGES.existingSiteWork);
+  if (ctaNeedsRegeneration(draft.cta)) issues.push(OUTREACH_VALIDATION_MESSAGES.cta);
   if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
   if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
-  if (subjectNeedsRegeneration(draft.subject)) issues.push("Use a mundane, specific subject of nine words or fewer; no hype, technical timing, or generic Quick question subject.");
+  if (subjectNeedsRegeneration(draft.subject)) issues.push(OUTREACH_VALIDATION_MESSAGES.subject);
   const words = wordCount(draft.bodyText);
-  if (words < 45 || words > 110) issues.push("Keep the complete email roughly 55-100 words; do not pad it.");
+  if (words < OUTREACH_POLICY.touch1.validationMinWords || words > OUTREACH_POLICY.touch1.validationMaxWords) issues.push(OUTREACH_VALIDATION_MESSAGES.length);
   if (!endsWithSenderFirstName(draft.bodyText, senderName)) issues.push("Sign off with the sender's first name on its own line.");
   return issues;
 }
@@ -271,33 +272,6 @@ export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", c
     || (subject ? subjectNeedsRegeneration(subject) : false)
     || (cta ? ctaNeedsRegeneration(cta) : false);
 }
-
-const HARD_OUTREACH_RULES = [
-  "Write Touch 1 as a short email Brian would personally type after noticing one real thing on a business website.",
-  "Brian's actual service is a new custom website for service businesses. He does not sell optimization, repair, maintenance, tuning, plugin work, or page-builder fixes on an existing website. Never imply that he will optimize or repair the prospect's current implementation.",
-  "The lead reaching this stage has been qualified because a custom rebuild is a reasonable business option. Touch 1 still should not pitch the rebuild; use the verified finding to earn a reply first.",
-  "The goal is only to earn a reply or permission to send the details. Do not try to book a consultation, meeting, calendar slot, or call in this first email.",
-  "Use one verified observation and one owner stake. The persuasion should come from why the fact matters, not from sales language.",
-  "Use the supplied psychological lever as private strategy. Do not name the technique. If a buyer moment is supplied and it reads naturally, use at most one short scenario so the owner can picture the consequence.",
-  "Loss aversion, self-interest, competitive choice, protecting existing spend, trust, and ease of action should shape what you say, not make the email sound like advertising copy.",
-  "Write in ordinary spoken English. Contractions and simple phrases are welcome. Prefer words a service-business owner would use over analyst or consultant terminology.",
-  "Do not copy or lightly paraphrase the private notes. Write the email from scratch as if the sender personally noticed the issue.",
-  "Never invent traffic loss, lead loss, revenue loss, ad spend, rankings, urgency, customer behavior, or business plans. Imagined customer behavior must remain a possibility, never a known event.",
-  "When measured elapsed time helps communicate severity, you may use a rounded, human-readable duration such as about 20 seconds, close to a minute, or over a minute. Do not expose milliseconds, performance metric names, scores, benchmark values, percentages from testing, or overly precise decimal timing copied from tools.",
-  "Never mention Lighthouse, PageSpeed, Core Web Vitals, LCP, CLS, TBT, audit/performance scores, crawlers, evidence sources, Lead Miner, or AI research.",
-  "Never mention the implementation stack, framework, CMS, platform, page builder, coding approach, or how a new site would be built. Do not mention Astro, WordPress, Wix, Elementor, Webflow, Squarespace, Shopify, Next.js, React, or similar technologies. Prospect-facing positioning is simply that Brian builds custom websites.",
-  "Do not explain implementation details, diagnose the whole website, prescribe a repair checklist, offer an optimization, or sell the project.",
-  "Do not tease an implementation diagnosis with wording such as what may be contributing, what may be causing it, root cause, or where it affects the page. The offer in Touch 1 is to send the observation or details, not to troubleshoot the existing site.",
-  "Start bodyText exactly with Hi, on its own line followed by a blank line. Do not invent a recipient name or team name.",
-  "Give enough context somewhere in the email that it is clear the sender builds custom websites or works in web development for service businesses. Use whatever short wording fits the email; do not force the same sentence into every message.",
-  "End with one small, low-pressure question that makes replying easy, usually permission to send what was found or see the details. Do not use formal consultation language and do not offer to optimize, fix, tune, repair, or diagnose the existing site in the CTA.",
-  "The cta field must exactly match that final question in bodyText.",
-  "Sign off with the sender's first name on its own line. No signature block.",
-  "Use a mundane, specific subject tied to the page, location, service, or thing noticed. Keep it under nine words. Do not put timing measurements in the subject. No hype, fake urgency, Free audit, Website audit, or Quick question.",
-  "Keep the whole email roughly 55 to 100 words.",
-  "No fake familiarity, generic compliments, flattery, guilt, fearmongering, exaggerated claims, or manufactured urgency.",
-  "Return only the required structured draft.",
-].join(" ");
 
 type LegacyProblem = {
   title: string;
@@ -430,22 +404,19 @@ export async function generateOutreachDraft(input: {
   };
   const recentCtas = (input.recentCtas ?? []).slice(0, 20);
   const packet = {
+    policyVersion: OUTREACH_POLICY.version,
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     businessType: input.keyword,
     qualificationDecision: input.qualificationDecision ?? null,
-    offerContext: {
-      service: "new custom website",
-      existingSiteWork: "not offered: no optimization, repair, maintenance, plugin work, or page-builder fixes",
-      prospectFacingPositioning: "custom websites only; no framework, CMS, platform, or implementation details",
-    },
+    offerContext: getOutreachOfferContext(),
     strategy: writerStrategy,
     recentCtas,
     sender: {
       name: senderName,
       firstName: senderFirstName,
       role: "web developer",
-      work: "builds new custom websites for service businesses",
+      work: OUTREACH_POLICY.offer.senderWork,
       email: senderEmail,
     },
   };
@@ -453,7 +424,7 @@ export async function generateOutreachDraft(input: {
   const strategyGuidance = editableInstructions.trim()
     ? `Campaign preferences follow. Use them only when they fit the private strategy; they are not an outline or wording template:\n${editableInstructions.trim()}\n\n`
     : "";
-  const systemInstructions = `${strategyGuidance}Non-editable Touch 1 writing and safety rules:\n${HARD_OUTREACH_RULES}`;
+  const systemInstructions = `${strategyGuidance}Non-editable Touch 1 writing and safety rules (${OUTREACH_POLICY.version}):\n${buildHardOutreachRules()}`;
 
   const first = await requestDraft(model, systemInstructions, packet);
   first.draft.angle = strategy.observation;
