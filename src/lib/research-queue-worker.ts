@@ -1,7 +1,7 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { processLeadResearch } from "./research-routes.js";
-import { rankResearchCandidates, type ResearchQueueBreakdown } from "./research-queue.js";
+import { rankResearchCandidates, researchQueueWhere, type ResearchQueueBreakdown } from "./research-queue.js";
 
 export async function processScoredResearchQueue(
   prisma: PrismaClient,
@@ -11,12 +11,7 @@ export async function processScoredResearchQueue(
   const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
   const poolSize = Math.min(Math.max(safeLimit * 20, 200), 2000);
   const candidates = await prisma.lead.findMany({
-    where: {
-      status: { in: ["new", "research_pending"] },
-      lastResearchedAt: null,
-      screeningStatus: { in: ["complete", "partial", "failed"] },
-      aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
-    },
+    where: researchQueueWhere() as any,
     orderBy: { createdAt: "asc" },
     take: poolSize,
     select: {

@@ -19,6 +19,25 @@ export type ResearchQueueCandidate = {
   createdAt: Date;
 };
 
+export function isResearchQueueEligible(lead: {
+  status: string;
+  lastResearchedAt: Date | null;
+  screeningStatus: string;
+}) {
+  return ["new", "research_pending"].includes(lead.status)
+    && lead.lastResearchedAt === null
+    && ["complete", "partial", "failed"].includes(lead.screeningStatus);
+}
+
+export function researchQueueWhere() {
+  return {
+    status: { in: ["new", "research_pending"] },
+    lastResearchedAt: null,
+    screeningStatus: { in: ["complete", "partial", "failed"] },
+    aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
+  } as const;
+}
+
 function acquisitionIntentScore(adSource: string) {
   return adSource === "paid_ad" ? 30 : 15;
 }
