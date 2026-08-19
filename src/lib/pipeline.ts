@@ -170,7 +170,7 @@ export async function runLeadSearchPipeline(
   });
   const candidateQueue = filteredQueue.slice(0, input.maxDomains);
 
-  onProgress?.("saving", `Saving ${candidateQueue.length} discovered candidates before site screening...`);
+  onProgress?.("persisting", `Saving ${candidateQueue.length} discovered candidates before site screening...`);
   const pendingCandidates = candidateQueue.map((entry) => buildLeadRecord({
     keyword: entry.keyword,
     domain: entry.domain,
