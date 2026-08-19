@@ -41,7 +41,7 @@ export function buildLeadRecord(params: {
     ...(pageSpeed?.reportUrl && { pagespeedReportUrl: pageSpeed.reportUrl }),
     ...(serpAd?.sourceTitle && { sourceTitle: serpAd.sourceTitle }),
     ...(serpAd?.businessName && { businessName: serpAd.businessName }),
-    ...(serpAd?.phone && { phone: serpAd.phone }),
+    ...(serpAd?.phone && { phone: serpAd.phone, phoneSource: "discovery" as const }),
     ...(serpAd?.address && { address: serpAd.address }),
   });
 }
