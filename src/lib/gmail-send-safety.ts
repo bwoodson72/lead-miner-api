@@ -61,6 +61,103 @@ export async function startGmailQuotaCooldown(prisma: PrismaClient, reason: stri
   return { until, reason: cleanReason };
 }
 
+export async function handleGmailSendingLimitDeliveryNotice(
+  prisma: PrismaClient,
+  input: { leadId: number; threadId: string; noticeAt: Date; noticeText: string },
+) {
+  const cooldown = await startGmailQuotaCooldown(prisma, input.noticeText, input.noticeAt);
+  const failed = await prisma.outreachMessage.findFirst({
+    where: {
+      leadId: input.leadId,
+      status: "sent",
+      providerThreadId: input.threadId,
+      sentAt: { lte: input.noticeAt },
+    },
+    orderBy: { sentAt: "desc" },
+  });
+
+  if (!failed) {
+    await prisma.activity.create({
+      data: {
+        leadId: input.leadId,
+        type: "gmail_quota_delivery_notice",
+        summary: `Gmail reported an account-level sending limit; outbound mail blocked until ${cooldown.until.toISOString()}`,
+        metadata: { providerThreadId: input.threadId, cooldownUntil: cooldown.until.toISOString(), reason: cooldown.reason },
+      },
+    }).catch(() => undefined);
+    await prisma.emailThread.updateMany({
+      where: { leadId: input.leadId, providerThreadId: input.threadId },
+      data: { lastInboundAt: input.noticeAt },
+    }).catch(() => undefined);
+    return { classification: "gmail_sending_limit" as const, retryMessageId: null, cooldownUntil: cooldown.until };
+  }
+
+  const previousDelivered = await prisma.outreachMessage.findMany({
+    where: { leadId: input.leadId, status: "sent", id: { not: failed.id } },
+    orderBy: { sentAt: "asc" },
+    select: { id: true, sentAt: true, providerThreadId: true },
+  });
+  const firstDeliveredAt = previousDelivered.find((message) => message.sentAt)?.sentAt ?? null;
+  const lastDeliveredAt = [...previousDelivered].reverse().find((message) => message.sentAt)?.sentAt ?? null;
+
+  const retry = await prisma.$transaction(async (tx) => {
+    await tx.outreachMessage.update({
+      where: { id: failed.id },
+      data: { status: "delivery_failed", sendError: cooldown.reason, scheduledAt: null },
+    });
+    const created = await tx.outreachMessage.create({
+      data: {
+        leadId: failed.leadId,
+        kind: failed.kind,
+        sequenceNumber: failed.sequenceNumber,
+        subject: failed.subject,
+        bodyText: failed.bodyText,
+        angle: failed.angle,
+        cta: failed.cta,
+        confidence: failed.confidence,
+        requiresReview: failed.requiresReview,
+        generationReason: failed.generationReason,
+        promptVersion: failed.promptVersion,
+        scheduledAt: cooldown.until,
+        status: "approved",
+        approvedAt: new Date(),
+      },
+    });
+    await tx.lead.update({
+      where: { id: input.leadId },
+      data: {
+        status: previousDelivered.length ? "contacted" : "ready_for_outreach",
+        outreachCount: previousDelivered.length,
+        firstContactAt: firstDeliveredAt,
+        lastOutreachDate: lastDeliveredAt,
+        followUpDate: null,
+      },
+    });
+    await tx.emailThread.upsert({
+      where: { providerThreadId: input.threadId },
+      update: { status: "open", lastInboundAt: input.noticeAt, lastOutboundAt: lastDeliveredAt },
+      create: { leadId: input.leadId, provider: "gmail", providerThreadId: input.threadId, status: "open", lastInboundAt: input.noticeAt, lastOutboundAt: lastDeliveredAt },
+    });
+    await tx.activity.create({
+      data: {
+        leadId: input.leadId,
+        type: "gmail_quota_delivery_rejected",
+        summary: `Gmail reported message ${failed.id} was not sent because the account reached a sending limit; retry ${created.id} deferred until ${cooldown.until.toISOString()}`,
+        metadata: {
+          failedMessageId: failed.id,
+          retryMessageId: created.id,
+          providerThreadId: input.threadId,
+          cooldownUntil: cooldown.until.toISOString(),
+          reason: cooldown.reason,
+        },
+      },
+    });
+    return created;
+  });
+
+  return { classification: "gmail_sending_limit" as const, retryMessageId: retry.id, cooldownUntil: cooldown.until };
+}
+
 async function activePolicy(prisma: PrismaClient, now: Date) {
   let policy = await getGmailSendPolicy(prisma);
   if (policy.gmailQuotaCooldownUntil && policy.gmailQuotaCooldownUntil <= now) {
