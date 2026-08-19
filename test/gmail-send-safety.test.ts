@@ -5,7 +5,7 @@ import {
   isGmailAccountSendingLimitNotice,
   isGmailMailSendingLimitError,
 } from "../src/lib/gmail-send-safety.js";
-import { GmailSendPolicyPatchSchema } from "../src/lib/gmail-send-policy.js";
+import { AppSettingsPatchSchema } from "../src/lib/settings.js";
 
 test("recognizes direct Gmail mail-sending quota errors", () => {
   assert.equal(isGmailMailSendingLimitError(new Error("Gmail API failed (429): User-rate limit exceeded (Mail sending)")), true);
@@ -33,8 +33,8 @@ test("recognizes Google's account-level sending-limit delivery notice", () => {
   }), false);
 });
 
-test("Gmail send-safety settings enforce bounded operator values", () => {
-  assert.deepEqual(GmailSendPolicyPatchSchema.parse({
+test("Gmail send-safety settings use the canonical AppSettings schema", () => {
+  assert.deepEqual(AppSettingsPatchSchema.parse({
     gmailRolling24hSafetyLimit: 100,
     minimumSendIntervalMinutes: 10,
     gmailQuotaCooldownHours: 24,
@@ -43,9 +43,9 @@ test("Gmail send-safety settings enforce bounded operator values", () => {
     minimumSendIntervalMinutes: 10,
     gmailQuotaCooldownHours: 24,
   });
-  assert.throws(() => GmailSendPolicyPatchSchema.parse({ gmailRolling24hSafetyLimit: 0 }));
-  assert.throws(() => GmailSendPolicyPatchSchema.parse({ minimumSendIntervalMinutes: 0 }));
-  assert.throws(() => GmailSendPolicyPatchSchema.parse({ gmailQuotaCooldownHours: 73 }));
+  assert.throws(() => AppSettingsPatchSchema.parse({ gmailRolling24hSafetyLimit: 0 }));
+  assert.throws(() => AppSettingsPatchSchema.parse({ minimumSendIntervalMinutes: 0 }));
+  assert.throws(() => AppSettingsPatchSchema.parse({ gmailQuotaCooldownHours: 73 }));
 });
 
 test("Gmail send safety errors retain machine-readable deferral state", () => {
