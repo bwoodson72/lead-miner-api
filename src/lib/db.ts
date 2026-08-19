@@ -25,7 +25,8 @@ export type UpsertResult = {
 function initialEmailEnrichmentState(lead: LeadRecord) {
   if (lead.email) return { emailEnrichmentStatus: "found", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: null, emailEnrichmentReason: "email_discovered" };
   if (lead.enrichmentStatus === "failed") return { emailEnrichmentStatus: "retry", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: new Date(Date.now() + 86_400_000), emailEnrichmentReason: "site_fetch_failed" };
-  return { emailEnrichmentStatus: "exhausted", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: null, emailEnrichmentReason: "search_exhausted" };
+  if (lead.enrichmentStatus === "enriched" || lead.enrichmentStatus === "skipped") return { emailEnrichmentStatus: "exhausted", emailEnrichmentAttempts: 1, lastEmailEnrichmentAt: new Date(), nextEmailEnrichmentAt: null, emailEnrichmentReason: "search_exhausted" };
+  return { emailEnrichmentStatus: "pending", emailEnrichmentAttempts: 0, lastEmailEnrichmentAt: null, nextEmailEnrichmentAt: null, emailEnrichmentReason: "candidate_discovered" };
 }
 
 export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
@@ -42,11 +43,14 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
         normalizedDomain,
         keyword: lead.keyword,
         adSource: lead.adSource,
-        lighthouseScore: lead.performanceScore,
-        lcp: Math.round(lead.lcp),
+        lighthouseScore: lead.performanceScore ?? undefined,
+        lcp: lead.lcp == null ? undefined : Math.round(lead.lcp),
         cls: lead.cls ?? undefined,
-        tbt: lead.tbt ? Math.round(lead.tbt) : undefined,
+        tbt: lead.tbt == null ? undefined : Math.round(lead.tbt),
         landingPageUrl: lead.landingPageUrl,
+        screeningStatus: lead.screeningStatus,
+        performanceOpportunity: lead.performanceOpportunity,
+        lastScreenedAt: lead.lastScreenedAt ? new Date(lead.lastScreenedAt) : undefined,
         businessName: lead.businessName ?? undefined,
         email: lead.email ?? undefined,
         phone: lead.phone ?? undefined,
@@ -70,10 +74,13 @@ export async function upsertLead(lead: LeadRecord): Promise<UpsertResult> {
             landingPageUrl: lead.landingPageUrl,
             keyword: lead.keyword,
             adSource: lead.adSource,
-            lighthouseScore: lead.performanceScore,
-            lcp: Math.round(lead.lcp),
+            lighthouseScore: lead.performanceScore == null ? null : lead.performanceScore,
+            lcp: lead.lcp == null ? null : Math.round(lead.lcp),
             cls: lead.cls ?? null,
-            tbt: lead.tbt ? Math.round(lead.tbt) : null,
+            tbt: lead.tbt == null ? null : Math.round(lead.tbt),
+            screeningStatus: lead.screeningStatus,
+            performanceOpportunity: lead.performanceOpportunity,
+            lastScreenedAt: lead.lastScreenedAt ? new Date(lead.lastScreenedAt) : null,
             email: lead.email ?? null,
             phone: lead.phone ?? null,
             address: lead.address ?? null,
