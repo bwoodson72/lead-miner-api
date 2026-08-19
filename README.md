@@ -1,6 +1,6 @@
 # Lead Miner API
 
-Express/TypeScript backend for Lead Miner. It discovers businesses, analyzes mobile website performance, enriches contact data, persists leads in PostgreSQL, runs AI research and qualification, generates outreach, sends through Gmail, manages follow-ups, syncs replies, and records CRM/analytics history.
+Express/TypeScript backend for Lead Miner. It discovers service-business candidates, persists them before expensive qualification, screens website performance, ranks candidates for AI website research, qualifies rebuild opportunities, enriches contact data only for qualified rebuild candidates, generates outreach, sends through Gmail, manages follow-ups, syncs replies, and records CRM/analytics history.
 
 Pairs with the Next.js `bwoodson72/lead-miner` operator UI.
 
@@ -9,14 +9,11 @@ Pairs with the Next.js `bwoodson72/lead-miner` operator UI.
 ```sh
 npm install
 cp .env.example .env
+npm run db:migrate
 npm run dev
 ```
 
-Run database migrations after pulling schema changes:
-
-```sh
-npm run db:migrate
-```
+Production `npm start` runs `prisma migrate deploy` automatically before starting the API, so committed schema migrations are applied before code that depends on them begins serving requests.
 
 ## Environment variables
 
@@ -36,32 +33,42 @@ npm run db:migrate
 
 Lead-search output is persisted directly in PostgreSQL. There is no emailed lead report and no report-recipient configuration.
 
-## Lead discovery flow
+## Candidate-first pipeline
 
-1. **Search** — discover local businesses and paid-ad landing pages.
-2. **Deduplicate** — normalize and deduplicate by business domain.
-3. **Analyze** — run mobile PageSpeed analysis.
-4. **Filter** — retain sites matching the configured performance criteria.
-5. **Enrich** — gather business/contact data and agency/chain signals.
-6. **Persist** — create or update the canonical lead in PostgreSQL.
-7. **Research** — when enabled and contactable, run structured AI research and qualification.
-8. **Draft** — generate evidence-backed outreach according to the configured approval policy.
+1. **Discover** — find local service businesses and paid-ad landing pages.
+2. **Deduplicate / basic exclusion** — normalize domains and remove deterministic exclusions such as known franchises.
+3. **Persist candidate** — save the legitimate candidate before PageSpeed, contact enrichment, or AI research can fail.
+4. **Screen website** — run mobile PageSpeed when available and classify performance as `strong`, `moderate`, `none`, or `unknown`. Performance is a research signal, never an admission gate.
+5. **Rank research queue** — calculate the canonical stateless research score from acquisition intent, performance signal, screening completeness, listing identity, and capped aging. Email contributes no points.
+6. **AI website research** — research screened candidates regardless of whether an email is known and classify them as `rebuild_candidate`, `no_material_opportunity`, or `needs_review`.
+7. **Contact enrichment** — only qualified `rebuild_candidate` leads enter automatic email/contact discovery.
+8. **Prioritize / select angle / draft** — qualified rebuild candidates with usable contact data proceed into outreach preparation.
+9. **Send / follow up / reply handling** — Gmail sending, sequence state, suppression, reply classification, and CRM lifecycle remain protected by deterministic safety rules.
 
-Search results remain available through the database-backed lead/dashboard APIs and frontend.
+The automation tick preserves this ordering by running research before qualified contact enrichment. Missing, deferred, failed, or exhausted email enrichment cannot suppress website research.
+
+## Pipeline visibility
+
+Useful candidate-pipeline endpoints include:
+
+- `GET /api/pipeline/summary` — research, screening, performance, and post-qualification contact-stage counts
+- `GET /api/pipeline/research-queue` — backend-ranked research queue and canonical score breakdown
+- `GET /api/leads/:id/pipeline-state` — one lead's research eligibility, queue score, screening state, and contact stage
+- `POST /api/leads/:id/research` — run/re-run website research without requiring an email
+- `POST /api/leads/bulk-research` — explicit-ID or canonical-queue bulk website research
 
 ## Outreach and replies
 
 Gmail / Google Workspace is the sole email transport. The backend stores exact outbound content, provider message/thread IDs, send attempts, follow-up state, replies, classifications, suppressions, AI jobs, and activity history.
 
-Sending remains protected by deterministic eligibility checks, suppression, daily caps, send windows, locks, idempotency, and the independent `AUTOMATION_SEND_ENABLED` production switch.
+Sending remains protected by deterministic eligibility checks, suppression, daily caps, send windows, locks, idempotency, and the independent `AUTOMATION_SEND_ENABLED` production switch. Outreach is limited to qualified custom-rebuild opportunities with a usable recipient; contact-neutral research does not weaken those sending requirements.
 
-## Useful endpoints
+## Other useful endpoints
 
-- `POST /api/run-lead-search` — start a lead-search job
+- `POST /api/run-lead-search` — start a candidate search job
 - `GET /api/jobs/:id` — inspect search-job progress/results
 - `GET /api/leads` — list/filter persisted leads
 - `GET /api/leads/:id/detail` — aggregate lead CRM view
-- `POST /api/leads/:id/research` — run/re-run research
 - `GET /api/outreach/review` — outreach review queue
 - `POST /api/inbox/sync` — sync Gmail replies
 - `GET /api/inbox/actions` — replies requiring attention
