@@ -4,6 +4,7 @@ export type SendEligibilityLead = {
   email: string | null;
   domain: string;
   status: string;
+  qualificationDecision?: string | null;
   replyStatus: string | null;
   lastReplyAt: Date | null;
   suppressions: Array<{ value: string }>;
@@ -30,6 +31,7 @@ export function getSendIneligibilityReason(lead: SendEligibilityLead): string | 
   const contactRisk = getContactIdentityRiskReason(lead);
   if (contactRisk) return contactRisk;
   if (lead.replyStatus || lead.lastReplyAt) return "Lead has already replied";
+  if (lead.qualificationDecision && lead.qualificationDecision !== "rebuild_candidate") return `Lead decision ${lead.qualificationDecision} is not send-eligible`;
   if (BLOCKED_SEND_STATUSES.has(lead.status)) return `Lead status ${lead.status} is not send-eligible`;
   const email = lead.email.toLowerCase();
   const domain = lead.domain.toLowerCase();
