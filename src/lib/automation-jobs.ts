@@ -55,7 +55,7 @@ async function processDueRevisits(prisma: PrismaClient, limit = 50) {
 
 async function recalculatePriorities(prisma: PrismaClient, limit = 100) {
   const leads = await prisma.lead.findMany({
-    where: { email: { not: null }, qualificationDecision: { in: ["rebuild_candidate", "optimization_candidate"] }, assetAssessments: { some: {} } },
+    where: { email: { not: null }, qualificationDecision: "rebuild_candidate", assetAssessments: { some: {} } },
     orderBy: { updatedAt: "asc" },
     take: limit,
     select: { id: true },
