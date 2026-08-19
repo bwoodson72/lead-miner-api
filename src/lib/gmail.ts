@@ -32,6 +32,7 @@ function textFromPayload(payload: any): string {
 }
 
 export type GmailMessage = { id: string; threadId: string; from: string | null; to: string | null; subject: string | null; rfcMessageId: string | null; date: string | null; internalDate: Date; text: string; labelIds: string[] };
+export type GmailLabel = { id: string; name: string; type?: string };
 
 async function gmailFetch(path: string, init?: RequestInit) {
   const token = await accessToken();
@@ -52,6 +53,67 @@ export async function findGmailMessageByRfcMessageId(rfcMessageId: string): Prom
   const result = await gmailFetch(`/messages?q=${query}&maxResults=1`);
   const id = result.messages?.[0]?.id as string | undefined;
   return id ? getGmailMessage(id) : null;
+}
+
+const LABEL_CACHE_TTL_MS = 5 * 60_000;
+let labelCache: { loadedAt: number; byName: Map<string, string> } | null = null;
+let labelMutationQueue: Promise<void> = Promise.resolve();
+
+async function loadGmailLabelIds(force = false) {
+  if (!force && labelCache && Date.now() - labelCache.loadedAt < LABEL_CACHE_TTL_MS) return labelCache.byName;
+  const result = await gmailFetch("/labels");
+  const labels = (result.labels ?? []) as GmailLabel[];
+  labelCache = { loadedAt: Date.now(), byName: new Map(labels.filter((label) => label.id && label.name).map((label) => [label.name, label.id])) };
+  return labelCache.byName;
+}
+
+function withLabelMutationLock<T>(operation: () => Promise<T>) {
+  const result = labelMutationQueue.then(operation, operation);
+  labelMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+export async function findGmailLabelIds(names: string[]) {
+  const byName = await loadGmailLabelIds();
+  return new Map(names.flatMap((name) => {
+    const id = byName.get(name);
+    return id ? [[name, id] as const] : [];
+  }));
+}
+
+export async function ensureGmailLabelIds(names: string[]) {
+  const uniqueNames = Array.from(new Set(names.filter(Boolean)));
+  return withLabelMutationLock(async () => {
+    const byName = await loadGmailLabelIds();
+    for (const name of uniqueNames) {
+      if (byName.has(name)) continue;
+      const created = await gmailFetch("/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, messageListVisibility: "show", labelListVisibility: "labelShow" }),
+      }) as GmailLabel;
+      if (!created.id) throw new Error(`Gmail label creation returned no id for ${name}`);
+      byName.set(name, created.id);
+    }
+    labelCache = { loadedAt: Date.now(), byName };
+    return new Map(uniqueNames.map((name) => [name, byName.get(name)!]));
+  });
+}
+
+export async function getGmailThreadLabelIds(threadId: string) {
+  const thread = await gmailFetch(`/threads/${encodeURIComponent(threadId)}?format=minimal`);
+  return Array.from(new Set<string>((thread.messages ?? []).flatMap((message: any) => message.labelIds ?? [])));
+}
+
+export async function modifyGmailThreadLabels(threadId: string, input: { addLabelIds?: string[]; removeLabelIds?: string[] }) {
+  const addLabelIds = Array.from(new Set(input.addLabelIds ?? []));
+  const removeLabelIds = Array.from(new Set(input.removeLabelIds ?? [])).filter((id) => !addLabelIds.includes(id));
+  if (!addLabelIds.length && !removeLabelIds.length) return null;
+  return gmailFetch(`/threads/${encodeURIComponent(threadId)}/modify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ addLabelIds, removeLabelIds }),
+  });
 }
 
 export async function sendGmailMessage(input: { fromName: string; fromEmail: string; to: string; subject: string; bodyText: string; messageId: string; threadId?: string | null; inReplyToMessageId?: string | null }) {
