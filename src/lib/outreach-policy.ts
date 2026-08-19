@@ -8,7 +8,7 @@ function escapeRegex(value: string) {
 }
 
 function literalPattern(value: string) {
-  return escapeRegex(value).replace(/\\ /g, "\\s+");
+  return escapeRegex(value).replace(/ /g, "\\s+");
 }
 
 function listLabels(values: readonly OutreachPolicyPattern[]) {
