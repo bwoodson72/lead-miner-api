@@ -1,37 +1,12 @@
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { calculateResearchQueueScore, rankResearchCandidates } from "./research-queue.js";
-
-export function isResearchQueueEligible(lead: {
-  status: string;
-  lastResearchedAt: Date | null;
-  screeningStatus: string;
-}) {
-  return ["new", "research_pending"].includes(lead.status)
-    && lead.lastResearchedAt === null
-    && ["complete", "partial", "failed"].includes(lead.screeningStatus);
-}
-
-export function researchQueueWhere() {
-  return {
-    status: { in: ["new", "research_pending"] },
-    lastResearchedAt: null,
-    screeningStatus: { in: ["complete", "partial", "failed"] },
-    aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
-  } as const;
-}
-
-export function qualifiedContactEnrichmentDueWhere(now = new Date()) {
-  return {
-    email: null,
-    qualificationDecision: "rebuild_candidate",
-    status: { in: ["qualified", "ready_for_outreach"] },
-    OR: [
-      { emailEnrichmentStatus: "pending" },
-      { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } },
-    ],
-  } as const;
-}
+import {
+  calculateResearchQueueScore,
+  isResearchQueueEligible,
+  rankResearchCandidates,
+  researchQueueWhere,
+} from "./research-queue.js";
+import { qualifiedContactWhere } from "./qualified-enrichment.js";
 
 export function resolveContactPipelineState(lead: {
   qualificationDecision: string | null;
@@ -64,7 +39,7 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
       ] = await Promise.all([
         prisma.lead.count({ where: researchQueueWhere() as any }),
         prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: null, status: { in: ["qualified", "ready_for_outreach"] } } }),
-        prisma.lead.count({ where: qualifiedContactEnrichmentDueWhere(now) as any }),
+        prisma.lead.count({ where: qualifiedContactWhere(now) as any }),
         prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: null, status: { in: ["qualified", "ready_for_outreach"] }, emailEnrichmentStatus: "exhausted" } }),
         prisma.lead.count({ where: { screeningStatus: "pending" } }),
         prisma.lead.count({ where: { screeningStatus: "partial" } }),
