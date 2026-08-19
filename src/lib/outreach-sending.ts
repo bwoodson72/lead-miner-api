@@ -54,7 +54,7 @@ async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
     messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
     threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
     inReplyToMessageId,
-    beforeSend: () => assertGmailSendAllowed(prisma, { dailySendLimit: settings.dailySendLimit }).then(() => undefined),
+    beforeSend: () => assertGmailSendAllowed(prisma).then(() => undefined),
   });
   return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
 }
