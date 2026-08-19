@@ -7,7 +7,6 @@ import { type KeywordInput, type LeadRecord } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
 import { isFranchise } from "./franchise-filter.js";
 import { upsertLeads, type UpsertResult } from "./db.js";
-import { enrichLeadFromSite } from "./enrichment.js";
 
 type Diagnostics = {
   keywordsParsed: number;
@@ -26,11 +25,8 @@ type Diagnostics = {
   performanceNone: number;
   performanceUnknown: number;
   slowSites: number;
-  leadsEnriched: number;
-  enrichmentFailures: number;
-  emailsFound: number;
-  phonesFound: number;
   researchQueued: number;
+  contactEnrichmentDeferred: number;
   dbCreated: number;
   dbUpdated: number;
   dbFailed: number;
@@ -63,11 +59,8 @@ function emptyDiagnostics(): Diagnostics {
     performanceNone: 0,
     performanceUnknown: 0,
     slowSites: 0,
-    leadsEnriched: 0,
-    enrichmentFailures: 0,
-    emailsFound: 0,
-    phonesFound: 0,
     researchQueued: 0,
+    contactEnrichmentDeferred: 0,
     dbCreated: 0,
     dbUpdated: 0,
     dbFailed: 0,
@@ -185,12 +178,9 @@ export async function runLeadSearchPipeline(
   diagnostics.pageSpeedResults = pageSpeedMap.size;
   diagnostics.pageSpeedFailures = candidateQueue.length - pageSpeedMap.size;
 
-  onProgress?.("enriching", `Enriching ${candidateQueue.length} candidates...`);
-  const leads: LeadRecord[] = [];
-  for (let index = 0; index < candidateQueue.length; index++) {
-    const entry = candidateQueue[index]!;
+  const leads: LeadRecord[] = candidateQueue.map((entry) => {
     const pageSpeed = pageSpeedMap.get(entry.domain) ?? null;
-    const baseLead = buildLeadRecord({
+    const lead = buildLeadRecord({
       keyword: entry.keyword,
       domain: entry.domain,
       landingPageUrl: entry.url,
@@ -200,56 +190,23 @@ export async function runLeadSearchPipeline(
       adSource: entry.adSource,
       serpAd: entry.serpAd,
     });
-    recordPerformanceOpportunity(diagnostics, baseLead);
-
-    const enrichmentResult = await enrichLeadFromSite({
-      url: entry.url,
-      existingBusinessName: baseLead.businessName,
-      existingPhone: baseLead.phone,
-      existingAddress: baseLead.address,
-    });
-
-    if (enrichmentResult.enrichmentStatus === "enriched") {
-      diagnostics.leadsEnriched++;
-      if (enrichmentResult.email) diagnostics.emailsFound++;
-      if (enrichmentResult.phone || baseLead.phone) diagnostics.phonesFound++;
-    } else if (enrichmentResult.enrichmentStatus === "failed") {
-      diagnostics.enrichmentFailures++;
-    }
-
-    leads.push({
-      ...baseLead,
-      ...(enrichmentResult.businessName && { businessName: enrichmentResult.businessName }),
-      ...(enrichmentResult.contactPageUrl && { contactPageUrl: enrichmentResult.contactPageUrl }),
-      ...(enrichmentResult.email && { email: enrichmentResult.email, emailSource: "enrichment" as const }),
-      ...(baseLead.phone
-        ? { phoneSource: "discovery" as const }
-        : enrichmentResult.phone
-          ? { phone: enrichmentResult.phone, phoneSource: "enrichment" as const }
-          : {}),
-      ...(enrichmentResult.address && { address: enrichmentResult.address }),
-      enrichmentStatus: enrichmentResult.enrichmentStatus,
-      enrichmentNotes: enrichmentResult.enrichmentNotes,
-      ...(enrichmentResult.isAgencyManaged !== undefined && { isAgencyManaged: enrichmentResult.isAgencyManaged }),
-      ...(enrichmentResult.agencyName && { agencyName: enrichmentResult.agencyName }),
-      ...(enrichmentResult.isNationalChain !== undefined && { isNationalChain: enrichmentResult.isNationalChain }),
-      ...(enrichmentResult.chainReason && { chainReason: enrichmentResult.chainReason }),
-    });
-    onProgress?.("enriching", `${index + 1} of ${candidateQueue.length} candidates enriched`);
-  }
+    recordPerformanceOpportunity(diagnostics, lead);
+    return lead;
+  });
 
   diagnostics.slowSites = diagnostics.performanceStrong;
-  onProgress?.("saving", `Saving screening and enrichment results for ${leads.length} candidates...`);
+  onProgress?.("saving", `Saving screening results for ${leads.length} candidates...`);
   const finalDbResults = await upsertLeads(leads);
   const finalFailures = finalDbResults.filter((result) => result.action === "failed");
   if (finalFailures.length) {
     diagnostics.dbFailed += finalFailures.length;
-    diagnostics.messages.push(`Failed to persist final screening/enrichment for ${finalFailures.length} candidate(s)`);
+    diagnostics.messages.push(`Failed to persist final screening for ${finalFailures.length} candidate(s)`);
   }
 
   diagnostics.researchQueued = finalDbResults.filter((result) => result.action !== "failed").length;
+  diagnostics.contactEnrichmentDeferred = diagnostics.researchQueued;
   if (diagnostics.researchQueued) {
-    diagnostics.messages.push(`${diagnostics.researchQueued} candidate(s) are eligible for the scored AI research queue; contactability is not required`);
+    diagnostics.messages.push(`${diagnostics.researchQueued} candidate(s) queued for AI research; contact enrichment is deferred until rebuild qualification`);
   }
 
   onProgress?.(
