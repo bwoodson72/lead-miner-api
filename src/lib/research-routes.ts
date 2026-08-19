@@ -13,6 +13,7 @@ import { fetchBusinessAssetResearchPacket } from "./research-site-v10.js";
 import { assessPerformance } from "./performance-assessment.js";
 import { prepareLeadForOutreach } from "./outreach-preparation.js";
 import { refreshLeadPriorityForDecision } from "./priority-refresh.js";
+import { researchQueueWhere } from "./research-queue.js";
 
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number) {
   const settings = await getAppSettings(prisma);
@@ -121,7 +122,12 @@ export async function processLeadResearch(prisma: PrismaClient, leadId: number) 
 
 export async function processResearchReadyLeads(prisma: PrismaClient, limit = 10) {
   const safeLimit = capRequestedLimit(limit, 10, SAFETY_LIMITS.bulkResearchMax);
-  const leads = await prisma.lead.findMany({ where: { email: { not: null }, status: { in: ["new", "research_pending"] }, lastResearchedAt: null, aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } } }, orderBy: { createdAt: "asc" }, take: safeLimit, select: { id: true } });
+  const leads = await prisma.lead.findMany({
+    where: researchQueueWhere() as any,
+    orderBy: { createdAt: "asc" },
+    take: safeLimit,
+    select: { id: true },
+  });
   const results: Array<{ id: number; success: boolean; decision?: string; priorityScore?: number | null; draftId?: number; error?: string }> = [];
   for (const lead of leads) {
     try { const processed = await processLeadResearch(prisma, lead.id); results.push({ id: lead.id, success: true, decision: processed.result.decision, priorityScore: processed.priorityScore }); }
@@ -147,7 +153,7 @@ function statusForResearchError(message: string) {
   if (/lead not found/i.test(message)) return 404;
   if (/already running|concurrency limit/i.test(message)) return 409;
   if (/AI budget reached|Daily AI budget|Monthly AI budget/i.test(message)) return 429;
-  if (/no email|not research-ready|enrichment.*(?:exhausted|retry|found but)|no email was persisted/i.test(message)) return 422;
+  if (/not research-ready/i.test(message)) return 422;
   if (/openai|provider|fetch failed|econn|etimedout|429|502|503|504/i.test(message)) return 502;
   return 500;
 }
@@ -191,17 +197,24 @@ export function registerResearchRoutes(app: Express, prisma: PrismaClient) {
     if (requested.length > SAFETY_LIMITS.bulkResearchMax) { res.status(400).json({ error: `Bulk research is capped at ${SAFETY_LIMITS.bulkResearchMax} leads per request` }); return; }
     const settings = await getAppSettings(prisma);
     const batchLimit = Math.min(settings.researchBatchSize, SAFETY_LIMITS.bulkResearchMax);
-    const leadIds = requested.length ? requested.slice(0, batchLimit) : (await prisma.lead.findMany({ where: { status: { in: ["new", "research_pending"] }, lastResearchedAt: null }, orderBy: { createdAt: "asc" }, take: batchLimit, select: { id: true } })).map((lead) => lead.id);
+    const leadIds = requested.length
+      ? requested.slice(0, batchLimit)
+      : (await prisma.lead.findMany({ where: researchQueueWhere() as any, orderBy: { createdAt: "asc" }, take: batchLimit, select: { id: true } })).map((lead) => lead.id);
     const results = await processPreparedResearchBatch(prisma, leadIds);
     const alreadyHadEmail = results.filter((r) => r.preparation.alreadyHadEmail).length;
-    const enrichmentAttempted = results.filter((r) => r.preparation.enrichmentAttempted).length;
-    const emailsDiscovered = results.filter((r) => r.preparation.status === "email_found").length;
-    const enrichmentExhausted = results.filter((r) => r.preparation.status === "exhausted").length;
-    const enrichmentDeferred = results.filter((r) => r.preparation.status === "deferred").length;
-    const enrichmentFailed = results.filter((r) => r.preparation.status === "failed" || r.preparation.status === "missing").length;
     const researched = results.filter((r) => r.success).length;
     const researchFailed = results.filter((r) => r.preparation.ready && !r.success).length;
-    const skippedNoEmail = results.filter((r) => !r.preparation.ready && r.preparation.status !== "missing").length;
-    res.json({ selected: requested.length || leadIds.length, selectedForThisBatch: leadIds.length, cap: batchLimit, alreadyHadEmail, enrichmentAttempted, emailsDiscovered, enrichmentExhausted, enrichmentDeferred, enrichmentFailed, researchEligible: results.filter((r) => r.preparation.ready).length, researched, researchFailed, skippedNoEmail, processed: results.length, results });
+    res.json({
+      selected: requested.length || leadIds.length,
+      selectedForThisBatch: leadIds.length,
+      cap: batchLimit,
+      contactNeutral: true,
+      alreadyHadEmail,
+      researchEligible: results.filter((r) => r.preparation.ready).length,
+      researched,
+      researchFailed,
+      processed: results.length,
+      results,
+    });
   });
 }
