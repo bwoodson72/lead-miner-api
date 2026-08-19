@@ -33,10 +33,15 @@ function textFromPayload(payload: any): string {
 
 export type GmailMessage = { id: string; threadId: string; from: string | null; to: string | null; subject: string | null; rfcMessageId: string | null; date: string | null; internalDate: Date; text: string; labelIds: string[] };
 export type GmailLabel = { id: string; name: string; type?: string };
+export type GmailSentUsage = { count: number; capped: boolean; latestSentAt: Date | null };
 
-async function gmailFetch(path: string, init?: RequestInit) {
+async function gmailFetch(path: string, init?: RequestInit, options: { noProviderRetry?: boolean } = {}) {
   const token = await accessToken();
-  const response = await fetchWithProviderBackoff(`https://gmail.googleapis.com/gmail/v1/users/me${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } }, "Gmail API");
+  const input = `https://gmail.googleapis.com/gmail/v1/users/me${path}`;
+  const requestInit: RequestInit = { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } };
+  const response = options.noProviderRetry
+    ? await fetch(input, requestInit)
+    : await fetchWithProviderBackoff(input, requestInit, "Gmail API");
   if (!response.ok) throw new Error(`Gmail API failed (${response.status}): ${await response.text()}`);
   return response.json() as Promise<any>;
 }
@@ -53,6 +58,34 @@ export async function findGmailMessageByRfcMessageId(rfcMessageId: string): Prom
   const result = await gmailFetch(`/messages?q=${query}&maxResults=1`);
   const id = result.messages?.[0]?.id as string | undefined;
   return id ? getGmailMessage(id) : null;
+}
+
+export async function getGmailSentUsageSince(since: Date, stopAt = 500): Promise<GmailSentUsage> {
+  const safeStopAt = Math.max(1, Math.min(Math.floor(stopAt), 5000));
+  const query = encodeURIComponent(`in:sent after:${Math.floor(since.getTime() / 1000)}`);
+  let pageToken: string | undefined;
+  let count = 0;
+  let firstMessageId: string | null = null;
+  let capped = false;
+
+  do {
+    const remaining = safeStopAt - count;
+    const maxResults = Math.max(1, Math.min(500, remaining));
+    const tokenPart = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+    const result = await gmailFetch(`/messages?q=${query}&maxResults=${maxResults}${tokenPart}`);
+    const messages = (result.messages ?? []) as Array<{ id?: string }>;
+    if (!firstMessageId) firstMessageId = messages.find((message) => message.id)?.id ?? null;
+    count += messages.length;
+    pageToken = result.nextPageToken as string | undefined;
+    if (count >= safeStopAt) {
+      capped = Boolean(pageToken) || messages.length === maxResults;
+      count = safeStopAt;
+      break;
+    }
+  } while (pageToken);
+
+  const latestSentAt = firstMessageId ? (await getGmailMessage(firstMessageId)).internalDate : null;
+  return { count, capped, latestSentAt };
 }
 
 const LABEL_CACHE_TTL_MS = 5 * 60_000;
@@ -116,16 +149,18 @@ export async function modifyGmailThreadLabels(threadId: string, input: { addLabe
   });
 }
 
-export async function sendGmailMessage(input: { fromName: string; fromEmail: string; to: string; subject: string; bodyText: string; messageId: string; threadId?: string | null; inReplyToMessageId?: string | null }) {
+export async function sendGmailMessage(input: { fromName: string; fromEmail: string; to: string; subject: string; bodyText: string; messageId: string; threadId?: string | null; inReplyToMessageId?: string | null; beforeSend?: () => Promise<void> }) {
   const existing = await findGmailMessageByRfcMessageId(input.messageId);
   if (existing) return { id: existing.id, threadId: existing.threadId, reconciled: true };
+
+  await input.beforeSend?.();
 
   const headers = [`From: ${input.fromName} <${input.fromEmail}>`, `To: ${input.to}`, `Subject: ${input.subject}`, `Message-ID: ${input.messageId}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit"];
   if (input.inReplyToMessageId) { headers.push(`In-Reply-To: ${input.inReplyToMessageId}`); headers.push(`References: ${input.inReplyToMessageId}`); }
   const raw = b64url(`${headers.join("\r\n")}\r\n\r\n${input.bodyText}`);
 
   try {
-    const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) });
+    const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) }, { noProviderRetry: true });
     return { id: result.id as string, threadId: result.threadId as string, reconciled: false };
   } catch (error) {
     const reconciled = await findGmailMessageByRfcMessageId(input.messageId).catch(() => null);

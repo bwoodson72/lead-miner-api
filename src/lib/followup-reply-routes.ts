@@ -5,6 +5,7 @@ import { classifyReply, REPLY_PROMPT_VERSION } from "./ai-reply.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailThread } from "./gmail.js";
 import { syncLeadGmailPipelineLabelSafely } from "./gmail-pipeline.js";
+import { handleGmailSendingLimitDeliveryNotice, isGmailAccountSendingLimitNotice } from "./gmail-send-safety.js";
 import { sendApprovedMessage } from "./outreach-sending.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { applyReplyAutomationStop, leadStatusForReply } from "./reply-state.js";
@@ -126,6 +127,17 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
   const latest = inbound.at(-1);
   const lastObservedInbound = [lead.lastReplyAt, canonicalThread?.lastInboundAt].filter((date): date is Date => Boolean(date)).sort((a, b) => b.getTime() - a.getTime())[0];
   if (!latest || (lastObservedInbound && latest.internalDate <= lastObservedInbound)) return null;
+
+  if (isGmailAccountSendingLimitNotice(latest)) {
+    const handled = await handleGmailSendingLimitDeliveryNotice(prisma, {
+      leadId,
+      threadId,
+      noticeAt: latest.internalDate,
+      noticeText: latest.text,
+    });
+    await syncLeadGmailPipelineLabelSafely(prisma, leadId, "Gmail quota delivery notice", { threadId });
+    return handled;
+  }
 
   const packetHash = hashAiPacket({ promptVersion: REPLY_PROMPT_VERSION, threadId, messageId: latest.id, text: latest.text, context: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) });
   const identical = await prisma.aIJob.findFirst({ where: { leadId, type: "reply_classification", packetHash, status: "complete" } });

@@ -335,6 +335,9 @@ model AppSettings {
   dailyAiSpendLimit Float @default(5) @map("daily_ai_spend_limit")
   monthlyAiSpendLimit Float @default(100) @map("monthly_ai_spend_limit")
   dailySendLimit Int @default(40) @map("daily_send_limit")
+  gmailRolling24hSafetyLimit Int @default(100) @map("gmail_rolling_24h_safety_limit")
+  minimumSendIntervalMinutes Int @default(10) @map("minimum_send_interval_minutes")
+  gmailQuotaCooldownHours Int @default(24) @map("gmail_quota_cooldown_hours")
   sendWindowStart String @default("09:00") @map("send_window_start")
   sendWindowEnd String @default("16:30") @map("send_window_end")
   sendTimezone String @default("America/Chicago") @map("send_timezone")
@@ -350,4 +353,12 @@ model AppSettings {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   @@map("app_settings")
+}
+
+model GmailSendState {
+  id Int @id @default(1)
+  cooldownUntil DateTime? @map("cooldown_until")
+  cooldownReason String? @map("cooldown_reason") @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("gmail_send_state")
 }

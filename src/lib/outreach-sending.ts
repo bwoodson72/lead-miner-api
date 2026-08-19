@@ -7,6 +7,12 @@ import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber, normalizeFollowUpDelays } from "./outreach-sequence.js";
 import { isCurrentOutreachPromptVersion, outreachMessageNeedsRegeneration, staleOutreachReason } from "./outreach-version.js";
 import {
+  GmailSendSafetyError,
+  assertGmailSendAllowed,
+  isGmailMailSendingLimitError,
+  startGmailQuotaCooldown,
+} from "./gmail-send-safety.js";
+import {
   getSendIneligibilityReason,
   isWithinSendWindow,
   nextEligibleSendTime,
@@ -39,7 +45,17 @@ async function sendViaGmail(prisma: PrismaClient, message: any, settings: any) {
   if (prior?.providerMessageId) {
     try { inReplyToMessageId = (await getGmailMessage(prior.providerMessageId)).rfcMessageId; } catch { inReplyToMessageId = null; }
   }
-  const result = await sendGmailMessage({ fromName: settings.senderName, fromEmail: settings.senderEmail, to: message.lead.email, subject: message.subject, bodyText: message.bodyText, messageId: makeGmailRfcMessageId(message.id, settings.senderEmail), threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null, inReplyToMessageId });
+  const result = await sendGmailMessage({
+    fromName: settings.senderName,
+    fromEmail: settings.senderEmail,
+    to: message.lead.email,
+    subject: message.subject,
+    bodyText: message.bodyText,
+    messageId: makeGmailRfcMessageId(message.id, settings.senderEmail),
+    threadId: thread?.providerThreadId ?? prior?.providerThreadId ?? null,
+    inReplyToMessageId,
+    beforeSend: () => assertGmailSendAllowed(prisma).then(() => undefined),
+  });
   return { providerMessageId: result.id, providerThreadId: result.threadId, reconciled: result.reconciled };
 }
 
@@ -101,6 +117,25 @@ async function completeSend(prisma: PrismaClient, message: any, provider: { prov
   return updated;
 }
 
+async function deferClaimedMessage(prisma: PrismaClient, message: any, reason: string, retryAt: Date | null) {
+  const scheduledAt = retryAt ?? new Date(Date.now() + 10 * 60_000);
+  await prisma.$transaction(async (tx) => {
+    await tx.outreachMessage.update({
+      where: { id: message.id },
+      data: { status: "approved", scheduledAt, sendAttemptedAt: null, sendError: reason },
+    });
+    await tx.activity.create({
+      data: {
+        leadId: message.leadId,
+        type: "message_send_deferred",
+        summary: `Message send deferred until ${scheduledAt.toISOString()}: ${reason}`,
+        metadata: { messageId: message.id, scheduledAt: scheduledAt.toISOString(), reason },
+      },
+    });
+  });
+  return scheduledAt;
+}
+
 async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
   const settings = await getAppSettings(prisma);
   const message = await assertSendEligible(prisma, messageId);
@@ -113,6 +148,24 @@ async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
     return await completeSend(prisma, { ...message, idempotencyKey: key }, provider);
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
+    if (error instanceof GmailSendSafetyError) {
+      await deferClaimedMessage(prisma, message, text, error.retryAt);
+      throw error;
+    }
+    if (isGmailMailSendingLimitError(error)) {
+      const cooldown = await startGmailQuotaCooldown(prisma, text);
+      await deferClaimedMessage(prisma, message, text, cooldown.until);
+      await prisma.activity.create({
+        data: {
+          leadId: message.leadId,
+          type: "gmail_quota_cooldown_started",
+          summary: `Gmail mail-sending limit reached; outbound mail blocked until ${cooldown.until.toISOString()}`,
+          metadata: { messageId: message.id, cooldownUntil: cooldown.until.toISOString(), reason: cooldown.reason },
+        },
+      }).catch(() => undefined);
+      await syncLeadGmailPipelineLabelSafely(prisma, message.leadId, "Gmail quota send failure", { threadId: providerThreadId });
+      throw error;
+    }
     await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendError: text } }).catch(() => undefined);
     await syncLeadGmailPipelineLabelSafely(prisma, message.leadId, "send failure", { threadId: providerThreadId });
     throw error;
@@ -123,10 +176,6 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
   const lease = await acquireAutomationLease(prisma, "outreach-send", 60_000);
   if (!lease) throw new Error("Another send operation is already in progress");
   try {
-    const settings = await getAppSettings(prisma);
-    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const sentOrClaimedToday = await prisma.outreachMessage.count({ where: { OR: [{ status: "sent", sentAt: { gte: startOfDay } }, { status: "sending", sendAttemptedAt: { gte: startOfDay } }] } });
-    if (sentOrClaimedToday >= settings.dailySendLimit) throw new Error(`Daily send limit reached (${settings.dailySendLimit})`);
     await assertSendEligible(prisma, messageId);
     const claim = await claimApprovedMessage(prisma, messageId);
     if (claim.state === "already_sent") {
@@ -157,7 +206,7 @@ export async function sendApprovedQueue(prisma: PrismaClient, limit = 25) {
   if (!isWithinSendWindow(settings.sendWindowStart, settings.sendWindowEnd, new Date(), settings.sendTimezone, settings.weekendSendingEnabled)) return [];
   const safeLimit = capRequestedLimit(limit, SAFETY_LIMITS.automationSendMax, SAFETY_LIMITS.automationSendMax);
   const now = new Date();
-  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES }, OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: safeLimit, select: { id: true } });
+  const messages = await prisma.outreachMessage.findMany({ where: { status: "approved", sequenceNumber: { lte: TOTAL_OUTREACH_TOUCHES }, OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] }, orderBy: [{ lead: { priorityScore: { sort: "desc", nulls: "last" } } }, { approvedAt: "asc" }], take: Math.min(safeLimit, 1), select: { id: true } });
   const results: Array<{ messageId: number; success: boolean; error?: string }> = [];
   for (const message of messages) {
     try { await sendApprovedMessage(prisma, message.id); results.push({ messageId: message.id, success: true }); }
