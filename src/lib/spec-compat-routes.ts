@@ -2,6 +2,7 @@ import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { z, ZodError } from "zod";
 import { sendApprovedQueue } from "./outreach-sending.js";
+import { syncLeadGmailPipelineLabelSafely } from "./gmail-pipeline.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
 const DecisionSchema = z.enum(["rebuild_candidate", "no_material_opportunity", "needs_review"]);
@@ -64,6 +65,7 @@ export function registerSpecCompatibilityRoutes(app: Express, prisma: PrismaClie
         await tx.activity.create({ data: { leadId: id, type: status === "qualified" ? "qualified" : "disqualified", summary: `Operator qualification: ${parsed.decision}`, metadata: { reason: parsed.reason ?? null } } });
         return updated;
       });
+      await syncLeadGmailPipelineLabelSafely(prisma, id, "operator qualification");
       res.json(lead);
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
@@ -82,6 +84,7 @@ export function registerSpecCompatibilityRoutes(app: Express, prisma: PrismaClie
         await tx.activity.create({ data: { leadId: id, type: "lead_updated", summary: "Lead updated by operator", metadata: { fields: Object.keys(parsed) } } });
         return updated;
       });
+      if (parsed.status !== undefined || parsed.qualificationDecision !== undefined) await syncLeadGmailPipelineLabelSafely(prisma, id, "operator lead update");
       res.json(lead);
     } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
