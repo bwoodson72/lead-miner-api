@@ -35,9 +35,13 @@ export type GmailMessage = { id: string; threadId: string; from: string | null; 
 export type GmailLabel = { id: string; name: string; type?: string };
 export type GmailSentUsage = { count: number; capped: boolean; latestSentAt: Date | null };
 
-async function gmailFetch(path: string, init?: RequestInit) {
+async function gmailFetch(path: string, init?: RequestInit, options: { noProviderRetry?: boolean } = {}) {
   const token = await accessToken();
-  const response = await fetchWithProviderBackoff(`https://gmail.googleapis.com/gmail/v1/users/me${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } }, "Gmail API");
+  const input = `https://gmail.googleapis.com/gmail/v1/users/me${path}`;
+  const requestInit: RequestInit = { ...init, headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } };
+  const response = options.noProviderRetry
+    ? await fetch(input, requestInit)
+    : await fetchWithProviderBackoff(input, requestInit, "Gmail API");
   if (!response.ok) throw new Error(`Gmail API failed (${response.status}): ${await response.text()}`);
   return response.json() as Promise<any>;
 }
@@ -156,7 +160,7 @@ export async function sendGmailMessage(input: { fromName: string; fromEmail: str
   const raw = b64url(`${headers.join("\r\n")}\r\n\r\n${input.bodyText}`);
 
   try {
-    const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) });
+    const result = await gmailFetch("/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw, ...(input.threadId ? { threadId: input.threadId } : {}) }) }, { noProviderRetry: true });
     return { id: result.id as string, threadId: result.threadId as string, reconciled: false };
   } catch (error) {
     const reconciled = await findGmailMessageByRfcMessageId(input.messageId).catch(() => null);
