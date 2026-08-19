@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildLeadRecord } from "../src/lib/filters.js";
 import { buildPerformanceScreen, classifyPerformanceOpportunity } from "../src/lib/site-screening.js";
 
 const thresholds = {
@@ -55,4 +56,38 @@ test("a discovered candidate can be marked pending before PageSpeed runs", () =>
     performanceOpportunity: "unknown",
     lastScreenedAt: null,
   });
+});
+
+test("a healthy fast site still builds a persistent lead candidate", () => {
+  const lead = buildLeadRecord({
+    keyword: "roofing contractor",
+    domain: "fastroofer.example",
+    landingPageUrl: "https://fastroofer.example/",
+    pageSpeed: result(),
+    thresholds,
+    adSource: "paid_ad",
+  });
+
+  assert.equal(lead.domain, "fastroofer.example");
+  assert.equal(lead.performanceOpportunity, "none");
+  assert.equal(lead.screeningStatus, "complete");
+  assert.equal(lead.performanceScore, 95);
+});
+
+test("a PageSpeed failure still builds a persistent lead candidate with unknown performance", () => {
+  const lead = buildLeadRecord({
+    keyword: "plumber",
+    domain: "unknownspeed.example",
+    landingPageUrl: "https://unknownspeed.example/",
+    pageSpeed: null,
+    thresholds,
+    screeningStatus: "partial",
+    adSource: "local_organic",
+  });
+
+  assert.equal(lead.domain, "unknownspeed.example");
+  assert.equal(lead.performanceOpportunity, "unknown");
+  assert.equal(lead.screeningStatus, "partial");
+  assert.equal(lead.performanceScore, null);
+  assert.equal(lead.lcp, null);
 });
