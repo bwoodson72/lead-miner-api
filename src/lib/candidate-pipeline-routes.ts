@@ -12,6 +12,27 @@ export function isResearchQueueEligible(lead: {
     && ["complete", "partial", "failed"].includes(lead.screeningStatus);
 }
 
+export function researchQueueWhere() {
+  return {
+    status: { in: ["new", "research_pending"] },
+    lastResearchedAt: null,
+    screeningStatus: { in: ["complete", "partial", "failed"] },
+    aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
+  } as const;
+}
+
+export function qualifiedContactEnrichmentDueWhere(now = new Date()) {
+  return {
+    email: null,
+    qualificationDecision: "rebuild_candidate",
+    status: { in: ["qualified", "ready_for_outreach"] },
+    OR: [
+      { emailEnrichmentStatus: "pending" },
+      { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } },
+    ],
+  } as const;
+}
+
 export function resolveContactPipelineState(lead: {
   qualificationDecision: string | null;
   email: string | null;
@@ -27,13 +48,6 @@ export function resolveContactPipelineState(lead: {
   return "waiting" as const;
 }
 
-const researchQueueWhere = {
-  status: { in: ["new", "research_pending"] },
-  lastResearchedAt: null,
-  screeningStatus: { in: ["complete", "partial", "failed"] },
-  aiJobs: { none: { type: "lead_research", status: { in: ["running", "complete"] } } },
-} as const;
-
 export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClient) {
   app.get("/api/pipeline/summary", async (_req, res) => {
     try {
@@ -48,9 +62,9 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
         performanceStrong,
         performanceModerate,
       ] = await Promise.all([
-        prisma.lead.count({ where: researchQueueWhere as any }),
+        prisma.lead.count({ where: researchQueueWhere() as any }),
         prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: null, status: { in: ["qualified", "ready_for_outreach"] } } }),
-        prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: null, status: { in: ["qualified", "ready_for_outreach"] }, OR: [{ emailEnrichmentStatus: "pending" }, { emailEnrichmentStatus: "retry", nextEmailEnrichmentAt: { lte: now } }] } }),
+        prisma.lead.count({ where: qualifiedContactEnrichmentDueWhere(now) as any }),
         prisma.lead.count({ where: { qualificationDecision: "rebuild_candidate", email: null, status: { in: ["qualified", "ready_for_outreach"] }, emailEnrichmentStatus: "exhausted" } }),
         prisma.lead.count({ where: { screeningStatus: "pending" } }),
         prisma.lead.count({ where: { screeningStatus: "partial" } }),
@@ -77,7 +91,7 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
       const requested = Number(req.query["limit"] ?? 50);
       const limit = Math.min(100, Math.max(1, Number.isFinite(requested) ? Math.floor(requested) : 50));
       const candidates = await prisma.lead.findMany({
-        where: researchQueueWhere as any,
+        where: researchQueueWhere() as any,
         orderBy: { createdAt: "asc" },
         take: 2000,
         select: {
