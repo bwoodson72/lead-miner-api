@@ -1,42 +1,48 @@
 import { type PageSpeedResult } from "./pagespeed.js";
 import { LeadRecordSchema, type LeadRecord, type SerpAd } from "./schemas.js";
 import { type Thresholds } from "../config/thresholds.js";
+import { buildPerformanceScreen, classifyPerformanceOpportunity, type ScreeningStatus } from "./site-screening.js";
 
 export function isSlowSite(result: PageSpeedResult, thresholds: Thresholds): boolean {
-  return (
-    result.lcp > thresholds.lcp &&
-    (result.performanceScore < thresholds.performanceScore ||
-     result.cls > thresholds.cls ||
-     result.tbt > thresholds.tbt)
-  );
+  return classifyPerformanceOpportunity(result, thresholds) === "strong";
 }
 
 export function buildLeadRecord(params: {
   keyword: string;
   domain: string;
   landingPageUrl: string;
-  pageSpeed: PageSpeedResult;
+  pageSpeed?: PageSpeedResult | null;
+  thresholds: Thresholds;
+  screeningStatus?: ScreeningStatus;
   adSource: "paid_ad" | "local_organic";
   serpAd?: SerpAd;
 }): LeadRecord {
-  const { keyword, domain, landingPageUrl, pageSpeed, adSource, serpAd } = params;
+  const { keyword, domain, landingPageUrl, pageSpeed = null, thresholds, screeningStatus, adSource, serpAd } = params;
   const timestamp = new Date().toISOString().slice(0, 10);
+  const screen = screeningStatus
+    ? {
+        screeningStatus,
+        performanceOpportunity: classifyPerformanceOpportunity(pageSpeed, thresholds),
+        lastScreenedAt: screeningStatus === "pending" ? null : new Date().toISOString(),
+      }
+    : buildPerformanceScreen(pageSpeed, thresholds, Boolean(pageSpeed));
 
   return LeadRecordSchema.parse({
     keyword,
     domain,
     landingPageUrl,
-    performanceScore: pageSpeed.performanceScore,
-    lcp: pageSpeed.lcp,
-    cls: pageSpeed.cls,
-    tbt: pageSpeed.tbt,
+    performanceScore: pageSpeed?.performanceScore ?? null,
+    lcp: pageSpeed?.lcp ?? null,
+    cls: pageSpeed?.cls ?? null,
+    tbt: pageSpeed?.tbt ?? null,
     adSource,
     timestamp,
-    // PageSpeed metadata
-    pagespeedStrategy: pageSpeed.strategy,
-    pagespeedTestedAt: pageSpeed.testedAt,
-    ...(pageSpeed.reportUrl && { pagespeedReportUrl: pageSpeed.reportUrl }),
-    // SerpAd source metadata
+    screeningStatus: screen.screeningStatus,
+    performanceOpportunity: screen.performanceOpportunity,
+    ...(screen.lastScreenedAt && { lastScreenedAt: screen.lastScreenedAt }),
+    ...(pageSpeed?.strategy && { pagespeedStrategy: pageSpeed.strategy }),
+    ...(pageSpeed?.testedAt && { pagespeedTestedAt: pageSpeed.testedAt }),
+    ...(pageSpeed?.reportUrl && { pagespeedReportUrl: pageSpeed.reportUrl }),
     ...(serpAd?.sourceTitle && { sourceTitle: serpAd.sourceTitle }),
     ...(serpAd?.businessName && { businessName: serpAd.businessName }),
     ...(serpAd?.phone && { phone: serpAd.phone }),
