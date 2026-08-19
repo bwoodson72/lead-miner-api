@@ -1,6 +1,7 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getActiveOutreachSequence, getAppSettings } from "./settings.js";
 import { getGmailMessage, sendGmailMessage } from "./gmail.js";
+import { syncLeadGmailPipelineLabelSafely } from "./gmail-pipeline.js";
 import { acquireAutomationLease, releaseAutomationLease } from "./automation-lock.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber, normalizeFollowUpDelays } from "./outreach-sequence.js";
@@ -86,15 +87,18 @@ async function completeSend(prisma: PrismaClient, message: any, provider: { prov
   const followUpDate = breakup ? null : nextFollowUpDate(sequence.delaysDays, message.sequenceNumber, { from: sentAt, sendWindowStart: settings.sendWindowStart, sendWindowEnd: settings.sendWindowEnd, sendTimezone: settings.sendTimezone, weekendSendingEnabled: settings.weekendSendingEnabled });
   const nextStatus = followUpDate ? "contacted" : "closed_no_response";
 
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, scheduledAt: null, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
+  const updated = await prisma.$transaction(async (tx) => {
+    const sent = await tx.outreachMessage.update({ where: { id: message.id }, data: { status: "sent", sentAt, scheduledAt: null, sendError: null, providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId } });
     await tx.lead.update({ where: { id: message.leadId }, data: { status: nextStatus, outreachCount: { increment: 1 }, firstContactAt: message.lead.firstContactAt ?? sentAt, lastOutreachDate: sentAt, followUpDate } });
     if (provider.providerThreadId) await tx.emailThread.upsert({ where: { providerThreadId: provider.providerThreadId }, update: { leadId: message.leadId, provider: "gmail", recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt }, create: { leadId: message.leadId, provider: "gmail", providerThreadId: provider.providerThreadId, recipientEmail: message.lead.email, status: breakup ? "closed" : "open", lastOutboundAt: sentAt } });
     const followUpNumber = message.kind === "followup" ? message.sequenceNumber - 1 : null;
     await tx.activity.create({ data: { leadId: message.leadId, type: provider.reconciled ? "message_send_reconciled" : "message_sent", summary: `${message.kind === "initial" ? "Initial outreach" : `Follow-up ${followUpNumber}${breakup ? " (breakup)" : ""}`} ${provider.reconciled ? "reconciled as already sent" : "sent"} to ${message.lead.email}`, metadata: { messageId: message.id, provider: "gmail", providerMessageId: provider.providerMessageId, providerThreadId: provider.providerThreadId, followUpDate: followUpDate?.toISOString() ?? null, sequenceId: sequence.id, idempotencyKey: message.idempotencyKey, followUpNumber, breakup, promptVersion: message.promptVersion } } });
     if (followUpDate) await tx.activity.create({ data: { leadId: message.leadId, type: "followup_scheduled", summary: `Next follow-up scheduled for ${followUpDate.toISOString()}`, metadata: { followUpDate: followUpDate.toISOString(), sequenceNumber: message.sequenceNumber + 1 } } });
-    return updated;
+    return sent;
   });
+
+  await syncLeadGmailPipelineLabelSafely(prisma, message.leadId, "successful send", { threadId: provider.providerThreadId });
+  return updated;
 }
 
 async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
@@ -102,12 +106,15 @@ async function sendClaimedMessage(prisma: PrismaClient, messageId: number) {
   const message = await assertSendEligible(prisma, messageId);
   if (message.status !== "sending") throw new Error("Message is not claimed for sending");
   const key = message.idempotencyKey ?? makeOutreachIdempotencyKey(message.id);
+  let providerThreadId = message.providerThreadId ?? null;
   try {
     const provider = await sendViaGmail(prisma, message, settings);
+    providerThreadId = provider.providerThreadId;
     return await completeSend(prisma, { ...message, idempotencyKey: key }, provider);
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     await prisma.outreachMessage.update({ where: { id: message.id }, data: { sendError: text } }).catch(() => undefined);
+    await syncLeadGmailPipelineLabelSafely(prisma, message.leadId, "send failure", { threadId: providerThreadId });
     throw error;
   }
 }
@@ -122,7 +129,10 @@ export async function sendApprovedMessage(prisma: PrismaClient, messageId: numbe
     if (sentOrClaimedToday >= settings.dailySendLimit) throw new Error(`Daily send limit reached (${settings.dailySendLimit})`);
     await assertSendEligible(prisma, messageId);
     const claim = await claimApprovedMessage(prisma, messageId);
-    if (claim.state === "already_sent") return claim.message;
+    if (claim.state === "already_sent") {
+      await syncLeadGmailPipelineLabelSafely(prisma, claim.message.leadId, "already-sent reconciliation", { threadId: claim.message.providerThreadId });
+      return claim.message;
+    }
     return await sendClaimedMessage(prisma, messageId);
   } finally { await releaseAutomationLease(prisma, lease); }
 }
