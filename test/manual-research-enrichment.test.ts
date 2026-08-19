@@ -3,75 +3,64 @@ import assert from "node:assert/strict";
 import { getPreparedLeadForResearch } from "../src/lib/research-preparation.js";
 
 function makePrisma(initialLead: any) {
-  let storedLead = { ...initialLead };
+  const storedLead = { ...initialLead };
   return {
-    prisma: {
-      lead: {
-        async findUnique() { return { ...storedLead }; },
-      },
-    } as any,
-    updateLead(updates: Record<string, unknown>) {
-      storedLead = { ...storedLead, ...updates };
+    lead: {
+      async findUnique() { return { ...storedLead }; },
     },
-  };
+  } as any;
 }
 
-test("manual research forces enrichment even when retry is scheduled in the future", async () => {
-  const state = makePrisma({
+test("manual research never invokes email enrichment for a no-email lead", async () => {
+  const prisma = makePrisma({
     id: 101,
     email: null,
+    enrichmentNotes: "No contact address found yet",
     emailEnrichmentStatus: "retry",
-    emailEnrichmentReason: "site_fetch_failed",
-    nextEmailEnrichmentAt: new Date("2026-08-20T12:00:00Z"),
   });
   let enrichmentCalls = 0;
 
   const prepared = await getPreparedLeadForResearch(
-    state.prisma,
+    prisma,
     101,
     (async () => {
       enrichmentCalls += 1;
-      state.updateLead({
-        email: "hello@example.com",
-        emailEnrichmentStatus: "found",
-        emailEnrichmentReason: "email_discovered",
-        nextEmailEnrichmentAt: null,
-      });
-      return { leadId: 101, email: "hello@example.com", found: true, alreadyPresent: false, status: "found", attempts: 2, nextRetryAt: null };
+      throw new Error("Research must not call contact enrichment");
     }) as any,
-    new Date("2026-08-15T12:00:00Z"),
   );
 
-  assert.equal(enrichmentCalls, 1);
-  assert.equal(prepared.preparation.status, "email_found");
-  assert.equal(prepared.lead.email, "hello@example.com");
+  assert.equal(enrichmentCalls, 0);
+  assert.equal(prepared.preparation.status, "ready");
+  assert.equal(prepared.preparation.email, null);
+  assert.equal(prepared.preparation.enrichmentAttempted, false);
+  assert.equal(prepared.lead.email, null);
 });
 
-test("manual research forces one new enrichment attempt for an exhausted no-email lead", async () => {
-  const state = makePrisma({
+test("exhausted contact discovery does not block website research", async () => {
+  const prisma = makePrisma({
     id: 102,
     email: null,
+    enrichmentNotes: "Search exhausted",
     emailEnrichmentStatus: "exhausted",
-    emailEnrichmentReason: "search_exhausted",
-    nextEmailEnrichmentAt: null,
   });
-  let enrichmentCalls = 0;
 
-  const prepared = await getPreparedLeadForResearch(
-    state.prisma,
-    102,
-    (async () => {
-      enrichmentCalls += 1;
-      state.updateLead({
-        email: "contact@example.com",
-        emailEnrichmentStatus: "found",
-        emailEnrichmentReason: "email_discovered",
-      });
-      return { leadId: 102, email: "contact@example.com", found: true, alreadyPresent: false, status: "found", attempts: 4, nextRetryAt: null };
-    }) as any,
-  );
+  const prepared = await getPreparedLeadForResearch(prisma, 102);
 
-  assert.equal(enrichmentCalls, 1);
-  assert.equal(prepared.preparation.status, "email_found");
-  assert.equal(prepared.lead.email, "contact@example.com");
+  assert.equal(prepared.preparation.status, "ready");
+  assert.equal(prepared.preparation.alreadyHadEmail, false);
+  assert.equal(prepared.preparation.enrichmentAttempted, false);
+});
+
+test("an existing email is retained as metadata but is not a research requirement", async () => {
+  const prisma = makePrisma({
+    id: 103,
+    email: "hello@example.com",
+    enrichmentNotes: null,
+  });
+
+  const prepared = await getPreparedLeadForResearch(prisma, 103);
+
+  assert.equal(prepared.preparation.status, "ready");
+  assert.equal(prepared.preparation.alreadyHadEmail, true);
+  assert.equal(prepared.preparation.email, "hello@example.com");
 });
