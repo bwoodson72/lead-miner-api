@@ -18,10 +18,13 @@ model Lead {
   city String?
   region String?
   adSource String @default("local_organic") @map("ad_source")
-  lighthouseScore Int @map("lighthouse_score")
-  lcp Int
+  lighthouseScore Int? @map("lighthouse_score")
+  lcp Int?
   cls Float?
   tbt Int?
+  screeningStatus String @default("pending") @map("screening_status")
+  performanceOpportunity String @default("unknown") @map("performance_opportunity")
+  lastScreenedAt DateTime? @map("last_screened_at")
   email String?
   phone String?
   address String?
@@ -81,6 +84,8 @@ model Lead {
   @@index([revisitAt])
   @@index([emailEnrichmentStatus, nextEmailEnrichmentAt])
   @@index([lighthouseScore])
+  @@index([screeningStatus])
+  @@index([performanceOpportunity])
   @@index([isAgencyManaged])
   @@index([isNationalChain])
   @@map("leads")
