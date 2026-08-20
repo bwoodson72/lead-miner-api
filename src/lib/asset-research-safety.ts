@@ -148,6 +148,15 @@ function stripUnverifiedVisitorClaims(value: string) {
   return kept;
 }
 
+function dimensionsContainUnverifiedVisitorClaim(dimensions: unknown) {
+  if (!dimensions || typeof dimensions !== "object" || Array.isArray(dimensions)) return false;
+  return Object.values(dimensions as Record<string, unknown>).some((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const evidence = (raw as Record<string, unknown>).evidence;
+    return typeof evidence === "string" && containsUnverifiedVisitorClaim(evidence);
+  });
+}
+
 function sanitizeDimensions(dimensions: unknown) {
   if (!dimensions || typeof dimensions !== "object" || Array.isArray(dimensions)) return dimensions;
   const entries = Object.entries(dimensions as Record<string, unknown>).map(([key, raw]) => {
@@ -198,10 +207,16 @@ export function enforcePlaceholderQualificationSafety<T extends {
   researchSummary?: string;
   dimensions?: unknown;
 }>(result: T): T {
+  const findingHadUnsupportedClaim = result.findings.some(isUnverifiedVisitorFacingFinding);
   const findings = result.findings.filter((finding) => !isUnverifiedVisitorFacingFinding(finding));
   const summaryHadUnsupportedClaim = typeof result.researchSummary === "string"
     && containsUnverifiedVisitorClaim(result.researchSummary);
   const reasonHadUnsupportedClaim = containsUnverifiedVisitorClaim(result.decisionReason);
+  const dimensionHadUnsupportedClaim = dimensionsContainUnverifiedVisitorClaim(result.dimensions);
+  const visitorSafetyChanged = findingHadUnsupportedClaim
+    || summaryHadUnsupportedClaim
+    || reasonHadUnsupportedClaim
+    || dimensionHadUnsupportedClaim;
   const researchSummary = typeof result.researchSummary === "string"
     ? (stripUnverifiedVisitorClaims(result.researchSummary)
       || `The assessment retains ${findings.length} finding(s) supported after visitor-visibility evidence filtering.`)
@@ -235,7 +250,7 @@ export function enforcePlaceholderQualificationSafety<T extends {
     } as T;
   }
 
-  if (!hasEnoughMaterialEvidenceForRebuild(base.findings)) {
+  if (visitorSafetyChanged && !hasEnoughMaterialEvidenceForRebuild(base.findings)) {
     return {
       ...base,
       decision: "needs_review",
@@ -245,7 +260,7 @@ export function enforcePlaceholderQualificationSafety<T extends {
     } as T;
   }
 
-  if (summaryHadUnsupportedClaim || reasonHadUnsupportedClaim) {
+  if (visitorSafetyChanged && (summaryHadUnsupportedClaim || reasonHadUnsupportedClaim)) {
     decisionReason = `REBUILD_CANDIDATE remains supported after evidence-safety filtering by ${materialReason(base.findings)}.`;
     return { ...base, decisionReason } as T;
   }
