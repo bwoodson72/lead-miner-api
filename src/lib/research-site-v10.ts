@@ -2,6 +2,7 @@ import {
   fetchBusinessAssetResearchPacket as fetchV8Packet,
   type BusinessAssetResearchPacket as V8BusinessAssetResearchPacket,
 } from "./research-site-v8.js";
+import { ensureCanonicalServiceHubSampled } from "./research-service-hub-sampling.js";
 import {
   fetchProviderScrapeEvidence,
   PROVIDER_SCRAPE_WARNING,
@@ -31,7 +32,7 @@ function emptyProviderEvidence(url: string): ProviderScrapeEvidence {
 }
 
 export async function fetchBusinessAssetResearchPacket(url: string): Promise<BusinessAssetResearchPacket> {
-  const packet = await fetchV8Packet(url);
+  const packet = await ensureCanonicalServiceHubSampled(await fetchV8Packet(url));
 
   if (packet.finalUrl && !packet.fetchError) {
     return {
