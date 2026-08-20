@@ -16,7 +16,7 @@ test("plain regeneration adds no artificial guidance", () => {
 test("one-time regeneration instruction reaches outreach writing instructions", async () => {
   await withRegenerationInstruction("Focus on the lost-lead consequence and do not mention speed.", async () => {
     const instructions = withOperatorOutreachNotes("Base campaign rules", "Owner posts actively on Facebook.");
-    assert.match(instructions, /OPERATOR OUTREACH NOTES/);
+    assert.match(instructions, /MY NOTES/);
     assert.match(instructions, /ONE-TIME OPERATOR REGENERATION INSTRUCTION/);
     assert.match(instructions, /Focus on the lost-lead consequence/);
     assert.match(instructions, /must not create or embellish facts/);

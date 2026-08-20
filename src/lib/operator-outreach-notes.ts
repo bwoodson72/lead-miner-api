@@ -15,10 +15,10 @@ export function withOperatorOutreachNotes(
 
   if (normalized) {
     const usage = mode === "reply"
-      ? "Use these notes only when deciding the recommended human action or composing suggestedResponse. Classify the prospect's inbound reply from the reply and thread itself; do not let these notes change the reply classification."
-      : "Use these notes as high-priority human context when choosing wording and emphasis for the sales message. If they conflict with automated research, prefer the operator's context unless doing so would create an unsupported claim. Do not quote the notes mechanically.";
+      ? "Use these notes only when deciding the recommended human action or composing suggestedResponse. Classify the prospect's inbound reply from the reply and thread itself; do not let these notes change the reply classification. These notes never change research, qualification, priority, or the stored qualification decision."
+      : "Use these notes only as persistent human context for wording and emphasis after qualification. They never change research, qualification, priority, or the stored qualification decision, and they do not select the outreach angle. Treat factual observations in the notes as operator-provided context for the message, while still obeying all factual and evidence-safety rules. Do not quote the notes mechanically.";
 
-    combined = `${instructions}\n\nOPERATOR OUTREACH NOTES\nThese notes were supplied manually by the salesperson and are private context, not text to copy verbatim. ${usage}\n<operator_notes>\n${normalized}\n</operator_notes>`;
+    combined = `${instructions}\n\nMY NOTES\nThese notes were supplied manually by the operator and are private context, not text to copy verbatim. ${usage}\n<operator_notes>\n${normalized}\n</operator_notes>`;
   }
 
   return mode === "outreach" ? appendRegenerationInstruction(combined) : combined;
