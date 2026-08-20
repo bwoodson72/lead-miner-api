@@ -39,7 +39,9 @@ export function researchQueueWhere() {
 }
 
 function acquisitionIntentScore(adSource: string) {
-  return adSource === "paid_ad" ? 30 : 15;
+  if (adSource === "paid_ad") return 30;
+  if (adSource === "local_organic") return 15;
+  return 0;
 }
 
 function performanceSignalScore(performanceOpportunity: string) {
