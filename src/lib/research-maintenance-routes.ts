@@ -5,7 +5,7 @@ import { RESEARCH_VERSION } from "./ai-research.js";
 import { authorizeCronRequest, getAutomationRuntimePolicy } from "./automation-policy.js";
 import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 
-const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10", "lead-research-v11", "lead-research-v12", "lead-research-v13"];
+const STALE_RESEARCH_VERSIONS = ["lead-research-v3", "lead-research-v4", "lead-research-v5", "lead-research-v6", "lead-research-v7", "lead-research-v8", "lead-research-v9", "lead-research-v10", "lead-research-v11", "lead-research-v12", "lead-research-v13", "lead-research-v14"];
 const SAFE_MAINTENANCE_STATUSES = ["new", "research_pending", "qualified", "disqualified", "ready_for_outreach"];
 
 type ProcessResearchFn = typeof processLeadResearch;
@@ -101,6 +101,7 @@ export function registerResearchMaintenanceRoutes(app: Express, prisma: PrismaCl
   };
 
   app.post("/api/maintenance/research-current", handler);
+  app.post("/api/maintenance/research-v15", handler);
   app.post("/api/maintenance/research-v14", handler);
   app.post("/api/maintenance/research-v13", handler);
   app.post("/api/maintenance/research-v12", handler);
