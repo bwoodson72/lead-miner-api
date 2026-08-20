@@ -4,6 +4,7 @@ import { fetchWithProviderBackoff } from "./provider-retry.js";
 import { RESEARCH_EVIDENCE_SOURCES } from "./research-evidence-safety.js";
 import {
   applyAssetFindingSafety,
+  enforcePlaceholderQualificationSafety,
   isUnsupportedCrawlerReachabilityFinding,
 } from "./asset-research-safety.js";
 import { assessPerformance, type PerformanceAssessment } from "./performance-assessment.js";
@@ -82,7 +83,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v12";
+export const RESEARCH_VERSION = "lead-research-v13";
 
 function dimensionJsonSchema() {
   return {
@@ -168,7 +169,8 @@ const HARD_RESEARCH_RULES = [
   "If contactSignals.hasForm is true, never claim that the site or contact flow lacks a form. If it is false, static HTML may still miss JavaScript-rendered forms, so do not make a site-wide missing-form claim.",
   "siteCoverage and representativePages are bounded. architectureEvidenceComplete is false by design. Never treat absence from the packet as proof of site-wide absence.",
   "Never say visitors can see content supported only by dom_heading or dom_text.",
-  "Wrong-company, unrelated-industry, placeholder, or template contamination findings require visitor-facing corroboration before they can be high confidence or high significance.",
+  "Wrong-company or unrelated-industry contamination requires strong current corroboration before it can be high confidence or high significance.",
+  "Lorem ipsum, placeholder, demo, or sample content found in static HTML, representative-page extraction, provider extraction, or search-index evidence is visibility-unverified. It cannot by itself support REBUILD_CANDIDATE or a prospect-facing claim. Treat it as low significance unless an independent rendered-visibility-capable signal establishes that normal visitors actually see it.",
   "Paid advertising is acquisition context, not a defect or rebuild reason. Never invent spend or waste amounts.",
   "Do not penalize a site merely for lacking a blog, FAQs, testimonials, live chat, online booking, displayed pricing, location pages, individual service pages, schema markup, or a specific CTA type.",
   "Do not use aesthetic preference, 'dated' appearance by itself, generic modernization, CRO ideas, or optional best practices as rebuild qualification.",
@@ -257,7 +259,7 @@ export function applyCrawlerFailureSafety(
   website: BusinessAssetResearchPacket,
   performanceAssessment: PerformanceAssessment,
 ): ResearchResult {
-  const safeBase: ResearchResult = {
+  const safetyAdjusted: ResearchResult = {
     ...result,
     researchSummary: sanitizeResearchNarrative(result.researchSummary),
     decisionReason: sanitizeResearchNarrative(result.decisionReason),
@@ -267,6 +269,7 @@ export function applyCrawlerFailureSafety(
       .filter((finding) => !isUnsupportedCrawlerReachabilityFinding(finding))
       .filter((finding) => !isEvidenceGapFinding(finding)),
   };
+  const safeBase = enforcePlaceholderQualificationSafety(safetyAdjusted) as ResearchResult;
 
   if (website.finalUrl && !website.fetchError) return safeBase;
 
