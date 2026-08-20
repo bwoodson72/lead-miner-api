@@ -84,7 +84,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v14";
+export const RESEARCH_VERSION = "lead-research-v15";
 
 function dimensionJsonSchema() {
   return {
@@ -158,6 +158,9 @@ const HARD_RESEARCH_RULES = [
   "Poor performance is evidence, not an automatic rebuild qualification. An isolated speed or responsiveness problem on an otherwise capable site should normally be NO_MATERIAL_OPPORTUNITY for this service because Brian is not selling performance optimization of the existing implementation.",
   "Severe performance may contribute to REBUILD_CANDIDATE when it is strong enough, or combines with other material limitations, to make replacement with a custom implementation reasonable. Do not turn a performance finding into an optimization recommendation.",
   "A Lead Miner crawler fetch failure is only an inspection failure. It is never proof that normal visitors cannot reach the website.",
+  "Following a CTA or link with Lead Miner's HTTP crawler is not a rendered-browser interaction test. A crawler-only 404, redirect anomaly, fetch failure, or other response must be treated as diagnostic evidence only. Do not call a visitor-facing CTA, estimate path, booking path, quote path, link, or button broken, dead, unavailable, or nonfunctional unless rendered or interaction-capable evidence independently confirms it.",
+  "Static representative-page extraction is not rendered presentation evidence. Do not claim that visitors see pricing, $0.00, store-style presentation, product-style presentation, cart controls, checkout controls, or similar commerce UI solely because those strings or structures appear in extracted HTML. A /store/p/ URL may be described only as URL or architecture structure, not as proof of visitor-visible store presentation or a material defect.",
+  "Unverified crawler-interaction failures and unverified static-presentation artifacts must not support a constrained or weak capability rating, a material finding, the research summary, the decision reason, or REBUILD_CANDIDATE.",
   "providerScrapeEvidence is a current third-party extraction of the requested page. When succeeded is true, provider_scrape may support current page-topic, business-representation, demand-alignment, and content evidence. It is not a rendered browser and cannot prove forms, clicks, visual presentation, JavaScript-only interactions, complete navigation, or visitor reachability.",
   "If direct crawling fails but providerScrapeEvidence succeeds, do not describe the website as uninspected. State specifically that Lead Miner's direct TLS/HTTP crawler failed while current provider extraction succeeded.",
   "If direct crawling fails but searchIndexEvidence contains same-domain pages, use search_index only as bounded evidence about indexed page topics and apparent architecture. Search-index evidence may lag the live site.",
