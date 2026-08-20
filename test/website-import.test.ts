@@ -19,9 +19,11 @@ test("duplicate domains inside one import are rejected before persistence", () =
   assert.match(rows[1]?.reason ?? "", /row 1/i);
 });
 
-test("non-http URLs and malformed domains are rejected", () => {
+test("non-http and unsafe local targets are rejected", () => {
   assert.throws(() => normalizeImportWebsite("mailto:owner@example.com"), /http and https/i);
-  assert.throws(() => normalizeImportWebsite("localhost"), /valid domain/i);
+  assert.throws(() => normalizeImportWebsite("localhost"), /local or internal/i);
+  assert.throws(() => normalizeImportWebsite("127.0.0.1:3000"), /IP-address URLs/i);
+  assert.throws(() => normalizeImportWebsite("https://admin:secret@example.com"), /embedded credentials/i);
 });
 
 test("CSV import hard limit remains explicit", () => {
