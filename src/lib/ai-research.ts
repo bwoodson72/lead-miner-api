@@ -26,6 +26,7 @@ const FindingCategorySchema = z.enum([
   "customer_action",
   "acquisition_readiness",
   "site_maturity",
+  "content_depth",
   "objective_defect",
 ]);
 
@@ -83,7 +84,7 @@ export type ResearchLead = {
   chainReason: string | null;
 };
 
-export const RESEARCH_VERSION = "lead-research-v13";
+export const RESEARCH_VERSION = "lead-research-v14";
 
 function dimensionJsonSchema() {
   return {
@@ -128,7 +129,7 @@ function jsonSchema() {
           additionalProperties: false,
           required: ["category", "title", "evidence", "assetCapability", "confidence", "significance", "evidenceSources"],
           properties: {
-            category: { type: "string", enum: ["performance", "demand_alignment", "business_representation", "customer_action", "acquisition_readiness", "site_maturity", "objective_defect"] },
+            category: { type: "string", enum: ["performance", "demand_alignment", "business_representation", "customer_action", "acquisition_readiness", "site_maturity", "content_depth", "objective_defect"] },
             title: { type: "string" },
             evidence: { type: "string" },
             assetCapability: { type: "string" },
@@ -165,6 +166,11 @@ const HARD_RESEARCH_RULES = [
   "Enrichment notes describe Lead Miner's enrichment process and may contain historical crawler failures. They are not independent visitor-reachability evidence.",
   "Assess demand alignment semantically using the lead keyword and supplied website evidence. Exact keyword matching is not required.",
   "Assess business representation by how meaningfully the site explains the business and its apparent services. Do not require a particular number of pages.",
+  "representativePages[].contentDepth is deterministic direct-page evidence. substantiveWordCount attempts to exclude common navigation, header, footer, form, and button chrome; wholePageWordCount is retained only for comparison. Use substantiveWordCount and the contextual contentDepth signal when judging service-page depth.",
+  "Never label a page thin from word count alone. A short focused service page may still communicate its service adequately. Consider breadth of service topics, meaningful paragraphs, detail headings, useful list detail, and whether the page gives a prospective buyer enough service-specific information to understand and evaluate the offering.",
+  "When contentDepthSummary.strongThinServicePages is greater than zero, include at least one content_depth finding unless an existing finding already describes the same directly observed content limitation. A strong signal means a sampled service page is trying to cover several materially different services with very little substantive detail; describe the observed page and numbers rather than making a site-wide claim.",
+  "A contentDepth materialityHint of supporting or weak may support another finding but must not become a high-significance finding solely because the page is short. Thin content by itself does not automatically make a site a rebuild candidate; combine it with broader business-asset limitations when deciding whether replacement is reasonable.",
+  "Do not confuse content depth with keyword matching. A broad Services page can be materially thin even when it mentions the target keyword, and a well-developed page can be substantively adequate without repeating the target keyword.",
   "Assess customer-action capability from explicit phone, email, form, contact/request, quote, estimate, booking, scheduling, or other action paths. No particular contact method is required.",
   "If contactSignals.hasForm is true, never claim that the site or contact flow lacks a form. If it is false, static HTML may still miss JavaScript-rendered forms, so do not make a site-wide missing-form claim.",
   "siteCoverage and representativePages are bounded. architectureEvidenceComplete is false by design. Never treat absence from the packet as proof of site-wide absence.",
@@ -172,7 +178,7 @@ const HARD_RESEARCH_RULES = [
   "Wrong-company or unrelated-industry contamination requires strong current corroboration before it can be high confidence or high significance.",
   "Lorem ipsum, placeholder, demo, or sample content found in static HTML, representative-page extraction, provider extraction, or search-index evidence is visibility-unverified. It cannot by itself support REBUILD_CANDIDATE or a prospect-facing claim. Treat it as low significance unless an independent rendered-visibility-capable signal establishes that normal visitors actually see it.",
   "Paid advertising is acquisition context, not a defect or rebuild reason. Never invent spend or waste amounts.",
-  "Do not penalize a site merely for lacking a blog, FAQs, testimonials, live chat, online booking, displayed pricing, location pages, individual service pages, schema markup, or a specific CTA type.",
+  "Do not penalize a site merely for lacking a blog, FAQs, testimonials, live chat, online booking, displayed pricing, location pages, individual service pages, schema markup, or a specific CTA type. This rule does not excuse a directly sampled broad service page that provides materially too little information about the services it claims to cover.",
   "Do not use aesthetic preference, 'dated' appearance by itself, generic modernization, CRO ideas, or optional best practices as rebuild qualification.",
   "Several meaningful limitations may combine into a substantial business-asset gap even when nothing is technically broken.",
   "REBUILD_CANDIDATE means direct or strongly corroborated evidence shows multiple material limitations across the business asset, or a severe structural limitation, such that replacing the current implementation with a new custom Astro site is a reasonable business option. The current site does not need to be completely broken.",
@@ -182,7 +188,7 @@ const HARD_RESEARCH_RULES = [
   "Do not recommend or classify an optimization engagement. There is intentionally no optimization-qualified outcome in this system.",
   "Identify both the strongest capabilities and the most important limitations in the research summary.",
   "Research does not choose an outreach angle, estimate ability to pay, assign sales urgency, or recommend messaging.",
-  "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled direct page summaries, provider_scrape for current provider-extracted page text, search_index for indexed first-party titles/snippets, and site_coverage for bounded crawl/sitemap evidence.",
+  "Every dimension and finding must list the exact evidenceSources used. Use representative_page for sampled direct page summaries and deterministic content-depth signals, provider_scrape for current provider-extracted page text, search_index for indexed first-party titles/snippets, and site_coverage for bounded crawl/sitemap evidence.",
   "Return only the required structured result.",
 ].join(" ");
 
