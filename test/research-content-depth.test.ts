@@ -4,13 +4,15 @@ import { analyzeContentDepth, extractSubstantiveHtml } from "../src/lib/research
 
 const grimeServicesCopy = "At Grime Construction, our services include remodels, concrete, interior and exterior painting, new roof installations, and commercial projects of all sizes. From small repairs to large-scale builds, we do it all with quality craftsmanship, integrity, and attention to detail.";
 
-test("multi-service hub with very little substantive copy gets a strong thin-content signal", () => {
+test("multi-service hub ignores generic and CTA headings when scoring service detail", () => {
   const html = `
     <html><body>
       <header><nav>${"Home About Services Gallery Contact ".repeat(8)}</nav></header>
       <main>
-        <h1>Services</h1>
+        <h2>Services</h2>
         <p>${grimeServicesCopy}</p>
+        <h2>Call for a free estimate!</h2>
+        <p>817-648-9437</p>
       </main>
       <footer>${"Phone Email DFW Roofing Construction ".repeat(8)}</footer>
     </body></html>
@@ -19,10 +21,23 @@ test("multi-service hub with very little substantive copy gets a strong thin-con
   const result = analyzeContentDepth(html, "service");
   assert.equal(result.rating, "thin");
   assert.equal(result.materialityHint, "strong");
+  assert.equal(result.meaningfulParagraphCount, 1);
+  assert.equal(result.detailHeadingCount, 0);
   assert.ok(result.substantiveWordCount < result.wholePageWordCount);
   assert.ok(result.substantiveWordCount < 60);
   assert.ok(result.serviceTopics.length >= 5);
   assert.match(result.reason, /distinct service topics/i);
+});
+
+test("real service and process headings still count as service detail", () => {
+  const html = `<main>
+    <h1>Services</h1>
+    <h2>Kitchen Remodeling</h2>
+    <h3>Our Process</h3>
+    <p>We plan kitchen remodeling projects around layout, cabinetry, countertops, lighting, flooring, and the construction sequence from demolition through final walkthrough.</p>
+  </main>`;
+  const result = analyzeContentDepth(html, "service");
+  assert.equal(result.detailHeadingCount, 2);
 });
 
 test("page chrome is excluded from the substantive region when a main element exists", () => {
