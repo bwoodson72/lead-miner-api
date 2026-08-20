@@ -40,7 +40,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v18";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v19";
 
 function schema() {
   return {
@@ -231,13 +231,45 @@ function endsWithSenderFirstName(bodyText: string, senderName: string) {
   return lastLine?.toLowerCase() === firstName.toLowerCase();
 }
 
-function draftValidationIssues(draft: OutreachDraft, senderName: string, recentCtas: string[]) {
+type PreviousDraft = {
+  subject: string;
+  bodyText: string;
+  cta: string | null;
+};
+
+function normalizedWords(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+export function draftTooSimilarToPrevious(draft: Pick<OutreachDraft, "bodyText" | "cta">, previous: PreviousDraft) {
+  const currentBody = normalizedWords(draft.bodyText);
+  const previousBody = normalizedWords(previous.bodyText);
+  if (!currentBody.length || !previousBody.length) return false;
+  if (currentBody.join(" ") === previousBody.join(" ")) return true;
+
+  const currentSet = new Set(currentBody);
+  const previousSet = new Set(previousBody);
+  let intersection = 0;
+  for (const token of currentSet) if (previousSet.has(token)) intersection += 1;
+  const union = new Set([...currentSet, ...previousSet]).size || 1;
+  const jaccard = intersection / union;
+  const sameOpening = currentBody.slice(0, 8).join(" ") === previousBody.slice(0, 8).join(" ");
+  const sameCta = normalizedCtaSignature(draft.cta) === normalizedCtaSignature(previous.cta ?? "");
+  return jaccard >= 0.82 || (sameOpening && sameCta);
+}
+
+function draftValidationIssues(draft: OutreachDraft, senderName: string, recentCtas: string[], previousDraft?: PreviousDraft | null) {
   const issues: string[] = [];
   if (!hasNeutralGreeting(draft.bodyText)) issues.push(`Start exactly with ${OUTREACH_POLICY.touch1.greeting} on its own line.`);
   if (hasUnverifiedSalutation(draft.bodyText)) issues.push("Do not invent a recipient name, owner name, or team greeting.");
   if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove placeholder or fabricated identity text.");
   if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) issues.push("Open with the specific observation, not generic cold-email filler.");
-  if (!containsSenderIdentity(draft.bodyText, senderName)) issues.push(OUTREACH_VALIDATION_MESSAGES.senderIdentity);
   if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
   if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
   if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
@@ -253,6 +285,7 @@ function draftValidationIssues(draft: OutreachDraft, senderName: string, recentC
   const words = wordCount(draft.bodyText);
   if (words < OUTREACH_POLICY.touch1.validationMinWords || words > OUTREACH_POLICY.touch1.validationMaxWords) issues.push(OUTREACH_VALIDATION_MESSAGES.length);
   if (!endsWithSenderFirstName(draft.bodyText, senderName)) issues.push("Sign off with the sender's first name on its own line.");
+  if (previousDraft && draftTooSimilarToPrevious(draft, previousDraft)) issues.push("This regeneration is too similar to the previous draft. Rebuild the email with a different opening, sentence structure, framing, and CTA wording while preserving the supported facts.");
   return issues;
 }
 
@@ -345,6 +378,8 @@ export async function generateOutreachDraft(input: {
   strategy?: OutreachStrategy;
   recentCtas?: string[];
   selectedFinding?: SelectedFinding;
+  operatorNotes?: string | null;
+  previousDraft?: PreviousDraft | null;
   primaryOutreachAngle?: string | null;
   researchSummary?: string | null;
   qualificationReason?: string | null;
@@ -403,6 +438,7 @@ export async function generateOutreachDraft(input: {
     psychologicalLever: strategy.psychologicalLever,
   };
   const recentCtas = (input.recentCtas ?? []).slice(0, 20);
+  const operatorNotes = input.operatorNotes?.trim() || null;
   const packet = {
     policyVersion: OUTREACH_POLICY.version,
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
@@ -411,6 +447,15 @@ export async function generateOutreachDraft(input: {
     qualificationDecision: input.qualificationDecision ?? null,
     offerContext: getOutreachOfferContext(),
     strategy: writerStrategy,
+    operatorContext: operatorNotes ? {
+      source: "human My Notes",
+      observations: operatorNotes,
+      usage: "First-class private message context supplied by Brian. It may contribute at most one relevant firsthand observation alongside the selected research finding. It does not change qualification, priority, or the stored outreach angle. Do not quote it mechanically or expose it as notes.",
+    } : null,
+    regeneration: input.previousDraft ? {
+      previousDraft: input.previousDraft,
+      requirement: "Create a materially different Touch 1. Do not lightly paraphrase this draft. Change the opening construction, sentence structure, framing/body sequence, and CTA wording while preserving supported facts and the same low-friction objective.",
+    } : null,
     recentCtas,
     sender: {
       name: senderName,
@@ -422,13 +467,13 @@ export async function generateOutreachDraft(input: {
   };
 
   const strategyGuidance = editableInstructions.trim()
-    ? `Campaign preferences follow. Use them only when they fit the private strategy; they are not an outline or wording template:\n${editableInstructions.trim()}\n\n`
+    ? `Campaign preferences follow. They may guide tone, emphasis, and wording but must not override the factual strategy, operatorContext, or non-editable safety rules:\n${editableInstructions.trim()}\n\n`
     : "";
   const systemInstructions = `${strategyGuidance}Non-editable Touch 1 writing and safety rules (${OUTREACH_POLICY.version}):\n${buildHardOutreachRules()}`;
 
   const first = await requestDraft(model, systemInstructions, packet);
   first.draft.angle = strategy.observation;
-  let issues = draftValidationIssues(first.draft, senderName, recentCtas);
+  let issues = draftValidationIssues(first.draft, senderName, recentCtas, input.previousDraft);
   if (!issues.length) {
     return {
       draft: first.draft,
@@ -442,7 +487,7 @@ export async function generateOutreachDraft(input: {
 
   const second = await requestDraft(model, systemInstructions, packet, { previousDraft: first.draft, issues });
   second.draft.angle = strategy.observation;
-  issues = draftValidationIssues(second.draft, senderName, recentCtas);
+  issues = draftValidationIssues(second.draft, senderName, recentCtas, input.previousDraft);
   if (issues.length) throw new Error(`OpenAI outreach draft failed quality checks after rewrite: ${issues.join(" ")}`);
 
   return {
