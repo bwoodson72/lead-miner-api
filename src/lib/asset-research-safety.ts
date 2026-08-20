@@ -122,5 +122,5 @@ export function enforcePlaceholderQualificationSafety<T extends {
     assetStrength: "unknown",
     decisionReason: "Needs review because placeholder or demo text was detected only through non-rendered website extraction. Lead Miner cannot treat that text as a visitor-facing defect or use it to justify a custom rebuild without independent material evidence.",
     confidence: Math.min(result.confidence, 0.5),
-  };
+  } as T;
 }
