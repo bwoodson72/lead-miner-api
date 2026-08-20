@@ -16,7 +16,7 @@ export type AssetFinding = {
 
 const UNVERIFIED_DOM_SOURCES = new Set<ResearchEvidenceSource>(["dom_heading", "dom_text"]);
 const UNSUPPORTED_VISITOR_REACHABILITY = /\b(?:website|site|homepage|page|domain)\b[\s\S]{0,80}\b(?:unreachable|offline|down|unavailable|inaccessible|cannot be accessed|can't be accessed|not reachable|not accessible)\b|\b(?:unreachable|offline|down|unavailable|inaccessible|not reachable|not accessible)\b[\s\S]{0,80}\b(?:website|site|homepage|page|domain)\b/i;
-const UNVERIFIED_PLACEHOLDER_CONTENT = /\blorem ipsum\b|\bplaceholder(?: text| copy| content)?\b|\bdemo content\b|\bsample content\b/i;
+const UNVERIFIED_PLACEHOLDER_CONTENT = /\blorem ipsum\b|\bplaceholder (?:text|copy|content|section|language)\b|\bdemo (?:text|copy|content)\b|\bsample (?:text|copy|content)\b/i;
 
 function lowerSignificance(value: AssetFinding["significance"], ceiling: "low" | "medium") {
   if (ceiling === "low") return "low" as const;
