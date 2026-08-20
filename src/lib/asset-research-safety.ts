@@ -16,6 +16,7 @@ export type AssetFinding = {
 
 const UNVERIFIED_DOM_SOURCES = new Set<ResearchEvidenceSource>(["dom_heading", "dom_text"]);
 const UNSUPPORTED_VISITOR_REACHABILITY = /\b(?:website|site|homepage|page|domain)\b[\s\S]{0,80}\b(?:unreachable|offline|down|unavailable|inaccessible|cannot be accessed|can't be accessed|not reachable|not accessible)\b|\b(?:unreachable|offline|down|unavailable|inaccessible|not reachable|not accessible)\b[\s\S]{0,80}\b(?:website|site|homepage|page|domain)\b/i;
+const UNVERIFIED_PLACEHOLDER_CONTENT = /\blorem ipsum\b|\bplaceholder(?: text| copy| content)?\b|\bdemo content\b|\bsample content\b/i;
 
 function lowerSignificance(value: AssetFinding["significance"], ceiling: "low" | "medium") {
   if (ceiling === "low") return "low" as const;
@@ -35,9 +36,18 @@ export function containsUnsupportedVisitorReachabilityClaim(value: string | null
   return Boolean(value && UNSUPPORTED_VISITOR_REACHABILITY.test(value));
 }
 
+export function containsUnverifiedPlaceholderContent(value: string | null | undefined) {
+  return Boolean(value && UNVERIFIED_PLACEHOLDER_CONTENT.test(value));
+}
+
 export function isUnsupportedCrawlerReachabilityFinding(finding: AssetFinding) {
   const claim = `${finding.category} ${finding.title} ${finding.evidence} ${finding.assetCapability}`;
   return containsUnsupportedVisitorReachabilityClaim(claim);
+}
+
+export function isUnverifiedPlaceholderFinding(finding: AssetFinding) {
+  const claim = `${finding.category} ${finding.title} ${finding.evidence} ${finding.assetCapability}`;
+  return containsUnverifiedPlaceholderContent(claim);
 }
 
 export function applyAssetFindingSafety<T extends AssetFinding>(finding: T): T {
@@ -53,6 +63,13 @@ export function applyAssetFindingSafety<T extends AssetFinding>(finding: T): T {
     return {
       ...finding,
       confidence: Math.min(finding.confidence, 0.2),
+      significance: lowerSignificance(finding.significance, "low"),
+    };
+  }
+  if (isUnverifiedPlaceholderFinding(finding)) {
+    return {
+      ...finding,
+      confidence: Math.min(finding.confidence, 0.25),
       significance: lowerSignificance(finding.significance, "low"),
     };
   }
