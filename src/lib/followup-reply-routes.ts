@@ -14,6 +14,7 @@ import { SAFETY_LIMITS, capRequestedLimit } from "./safety-limits.js";
 import { FOLLOW_UP_COUNT, TOTAL_OUTREACH_TOUCHES, isBreakupSequenceNumber } from "./outreach-sequence.js";
 import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { nextEligibleSendTime } from "./workflow-policy.js";
+import { withOperatorOutreachNotes } from "./operator-outreach-notes.js";
 
 function futureDate(value: string | null | undefined) {
   if (!value) return null;
@@ -76,11 +77,12 @@ async function generateDueFollowUp(prisma: PrismaClient, leadId: number) {
   const evidenceProblems = findings.length
     ? findings.map((finding) => ({ title: finding.title, evidence: finding.evidence, businessConsequence: finding.assetCapability, confidence: finding.confidence }))
     : lead.problems.map((problem) => ({ title: problem.title, evidence: problem.evidence, businessConsequence: problem.businessConsequence, confidence: problem.confidence }));
-  const packetHash = hashAiPacket({ promptVersion: FOLLOWUP_PROMPT_VERSION, sequenceNumber, leadId, primaryOutreachAngle: lead.primaryOutreachAngle, priorMessages: sent.map((message) => ({ sequenceNumber: message.sequenceNumber, bodyText: message.bodyText })), evidenceProblems });
+  const followUpInstructions = withOperatorOutreachNotes(settings.followUpInstructions, lead.outreachNotes);
+  const packetHash = hashAiPacket({ promptVersion: FOLLOWUP_PROMPT_VERSION, sequenceNumber, leadId, instructions: followUpInstructions, primaryOutreachAngle: lead.primaryOutreachAngle, priorMessages: sent.map((message) => ({ sequenceNumber: message.sequenceNumber, bodyText: message.bodyText })), evidenceProblems });
   await assertAiBudgetAvailable(prisma, settings);
   const job = await prisma.aIJob.create({ data: { leadId, type: "followup_draft", status: "running", model: settings.outreachModel, promptVersion: FOLLOWUP_PROMPT_VERSION, packetHash, startedAt: new Date() } });
   try {
-    const generated = await withAiCapacity(prisma, () => generateFollowUp({ instructions: settings.followUpInstructions, sequenceNumber, businessName: lead.businessName, domain: lead.domain, researchSummary: lead.researchSummary, primaryOutreachAngle: lead.primaryOutreachAngle, problems: evidenceProblems, priorMessages: sent.map((m) => ({ kind: m.kind, sequenceNumber: m.sequenceNumber, subject: m.subject, bodyText: m.bodyText })) }, settings.outreachModel));
+    const generated = await withAiCapacity(prisma, () => generateFollowUp({ instructions: followUpInstructions, sequenceNumber, businessName: lead.businessName, domain: lead.domain, researchSummary: lead.researchSummary, primaryOutreachAngle: lead.primaryOutreachAngle, problems: evidenceProblems, priorMessages: sent.map((m) => ({ kind: m.kind, sequenceNumber: m.sequenceNumber, subject: m.subject, bodyText: m.bodyText })) }, settings.outreachModel));
     const autoApprove = settings.approvalMode === "auto_safe" && generated.draft.confidence >= settings.minAutoApproveConfidence;
     const followUpNumber = sequenceNumber - 1;
     const breakup = isBreakupSequenceNumber(sequenceNumber);
@@ -139,13 +141,14 @@ async function syncLeadReply(prisma: PrismaClient, leadId: number) {
     return handled;
   }
 
-  const packetHash = hashAiPacket({ promptVersion: REPLY_PROMPT_VERSION, threadId, messageId: latest.id, text: latest.text, context: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) });
+  const replyInstructions = withOperatorOutreachNotes(settings.replyInstructions, lead.outreachNotes, "reply");
+  const packetHash = hashAiPacket({ promptVersion: REPLY_PROMPT_VERSION, threadId, messageId: latest.id, text: latest.text, instructions: replyInstructions, context: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) });
   const identical = await prisma.aIJob.findFirst({ where: { leadId, type: "reply_classification", packetHash, status: "complete" } });
   if (identical) return null;
   await assertAiBudgetAvailable(prisma, settings);
   const job = await prisma.aIJob.create({ data: { leadId, type: "reply_classification", status: "running", model: settings.outreachModel, promptVersion: REPLY_PROMPT_VERSION, packetHash, startedAt: new Date() } });
   try {
-    const classified = await withAiCapacity(prisma, () => classifyReply({ instructions: settings.replyInstructions, replyText: latest.text, threadContext: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) }, settings.outreachModel));
+    const classified = await withAiCapacity(prisma, () => classifyReply({ instructions: replyInstructions, replyText: latest.text, threadContext: thread.map((m) => ({ from: m.from, text: m.text })).slice(-8) }, settings.outreachModel));
     const c = classified.result.classification;
     const status = leadStatusForReply(c);
     const explicitReturn = futureDate(classified.result.returnDate);
@@ -193,7 +196,7 @@ export function registerFollowupReplyRoutes(app: Express, prisma: PrismaClient) 
     try {
       const leads = await prisma.lead.findMany({ where: { replyHandledAt: null, replyStatus: { in: ["interested", "question", "objection", "not_now", "wrong_person", "referral", "out_of_office", "booking_intent", "other"] } }, orderBy: [{ status: "asc" }, { lastReplyAt: "desc" }], include: { activities: { where: { type: "reply_received" }, orderBy: { createdAt: "desc" }, take: 1 }, outreachMessages: { orderBy: { sequenceNumber: "asc" } }, emailThreads: { orderBy: { updatedAt: "desc" } }, contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] } } });
       res.json({ leads, total: leads.length });
-    } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+    } catch (error) { res.status(500).json({ error: error instanceof Error?error.message:String(error) }); }
   });
   app.post("/api/inbox/:id/resolve", async (req, res) => { const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; } try { const lead = await prisma.lead.update({ where: { id }, data: { replyHandledAt: new Date() } }); await prisma.activity.create({ data: { leadId: id, type: "reply_handled", summary: "Reply marked handled" } }); res.json(lead); } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); } });
 }
