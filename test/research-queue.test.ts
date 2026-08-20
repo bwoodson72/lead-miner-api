@@ -25,6 +25,12 @@ test("paid acquisition intent and strong performance move a candidate up the res
   assert.ok(stronger.total > ordinary.total);
 });
 
+test("unknown acquisition intent receives no invented search-intent credit", () => {
+  const imported = calculateResearchQueueScore(candidate({ adSource: "unknown" }), now);
+  assert.equal(imported.acquisitionIntent, 0);
+  assert.equal(imported.total, 15);
+});
+
 test("email availability is intentionally absent from research queue scoring", () => {
   const input = candidate({ phone: "817-555-0100", address: "100 Main St" });
   const score = calculateResearchQueueScore(input, now);
