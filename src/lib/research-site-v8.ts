@@ -6,6 +6,7 @@ import {
 } from "./research-site.js";
 import { fetchSearchIndexEvidence, type SearchIndexEvidence } from "./research-index-fallback.js";
 import { fetchWithTlsIssuerRecovery } from "./tls-issuer-recovery.js";
+import { stripStaticHiddenMarkup } from "./research-visible-html.js";
 
 export type RepresentativePageType = "service" | "location" | "about" | "other";
 
@@ -323,7 +324,7 @@ async function summarizePage(row: { url: string; type: RepresentativePageType })
     return { url: row.url, type: row.type, fetchStatus: null, fetchError: "Crawler could not inspect page or it redirected off-site", title: null, h1: [], h2: [], wordCount: 0, hasForm: false, pageText: "" };
   }
 
-  const html = response.text;
+  const html = stripStaticHiddenMarkup(response.text);
   const heading = (level: 1 | 2) => Array.from(html.matchAll(new RegExp(`<h${level}[^>]*>([\\s\\S]*?)<\\/h${level}>`, "gi")))
     .map((match) => textOnly(match[1] ?? ""))
     .filter(Boolean)
