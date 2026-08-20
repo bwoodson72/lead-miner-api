@@ -40,6 +40,7 @@ test("provider-extracted placeholder text is also treated as visibility-unverifi
 
 test("the placeholder guard is narrow and does not suppress ordinary defects", () => {
   assert.equal(containsUnverifiedPlaceholderContent("Quote button sends visitors to another company"), false);
+  assert.equal(containsUnverifiedPlaceholderContent("The footer contains a placeholder email address"), false);
   const safe = applyAssetFindingSafety({
     category: "objective_defect",
     title: "Quote CTA points to unrelated destination",
