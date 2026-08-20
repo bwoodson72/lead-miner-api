@@ -35,7 +35,7 @@ const SERVICE_TOPICS: Array<{ label: string; pattern: RegExp }> = [
   { label: "decks", pattern: /\bdecks?\b/i },
 ];
 
-const GENERIC_SERVICE_HEADINGS = /^(?:our\s+)?services?|what\s+we\s+do|service\s+overview$/i;
+const GENERIC_SERVICE_HEADINGS = /^(?:(?:our\s+)?services?|what\s+we\s+do|service\s+overview)$/i;
 const CTA_HEADING = /^(?:(?:ready\s+to\s+)?(?:get\s+started|start\s+your\s+project)|contact\s+us|get\s+in\s+touch|learn\s+more|call\s+(?:us\s+)?(?:now|today)?|(?:call|get|request|schedule|book)\b[\s\S]{0,60}\b(?:estimate|quote|consultation|appointment|project)|(?:free\s+)?(?:estimate|quote|consultation))!?$/i;
 
 function decodeHtml(value: string) {
