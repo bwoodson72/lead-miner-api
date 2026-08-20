@@ -9,6 +9,7 @@ import { normalizeUrl, extractRootDomain } from "./normalize-url.js";
 import { normalizeDomainValue } from "./db.js";
 import { isFranchise } from "./franchise-filter.js";
 import { createJob, updateJob } from "./jobs.js";
+import { processLeadResearch } from "./research-routes.js";
 
 export const IMPORT_ROW_LIMIT = 1000;
 export const ImportSourceSchema = z.enum(["manual_url", "csv_import"]);
@@ -41,6 +42,10 @@ export type ImportPreviewRow = {
   existingLeadId: number | null;
   data: WebsiteImportRow;
 };
+
+export function shouldResearchImportImmediately(source: ImportSource) {
+  return source === "manual_url";
+}
 
 function clean(value: string | null | undefined) {
   const trimmed = value?.trim();
@@ -214,15 +219,51 @@ async function processImportBatch(prisma: PrismaClient, batchId: number, source:
       });
     }
 
+    const researchResults: Array<{ id: number; success: boolean; decision?: string; error?: string }> = [];
+    if (shouldResearchImportImmediately(source) && created.length) {
+      updateJob(jobId, { progress: { stage: "researching", detail: created.length === 1 ? "Researching and qualifying imported candidate..." : `0 of ${created.length} imported candidates researched` } });
+      for (let index = 0; index < created.length; index++) {
+        const item = created[index]!;
+        try {
+          const processed = await processLeadResearch(prisma, item.id);
+          researchResults.push({ id: item.id, success: true, decision: processed.result.decision });
+        } catch (error) {
+          researchResults.push({ id: item.id, success: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        if (created.length > 1) updateJob(jobId, { progress: { stage: "researching", detail: `${index + 1} of ${created.length} imported candidates researched` } });
+      }
+    }
+
+    const researchFailures = researchResults.filter((result) => !result.success);
     const completed = await prisma.importBatch.update({
       where: { id: batchId },
-      data: { status: "complete", screenedLeads: created.length, screeningFailures, completedAt: new Date() },
+      data: { status: researchFailures.length ? "complete_with_errors" : "complete", screenedLeads: created.length, screeningFailures, completedAt: new Date() },
     });
+
+    if (shouldResearchImportImmediately(source) && researchFailures.length) {
+      const error = researchFailures.map((result) => `Lead #${result.id}: ${result.error ?? "Qualification failed"}`).join(" | ");
+      updateJob(jobId, {
+        status: "failed",
+        completedAt: Date.now(),
+        error,
+        diagnostics: { batchId, created: created.length, createdLeadIds: created.map((item) => item.id), existing: completed.existingRows, duplicate: completed.duplicateRows, invalid: completed.invalidRows, franchise: completed.franchiseRows, screeningFailures, researchAttempted: researchResults.length, researchSucceeded: researchResults.length - researchFailures.length, researchFailed: researchFailures.length, researchResults },
+        progress: { stage: "failed", detail: created.length === 1 ? "Candidate was added, but immediate qualification failed" : `${created.length} candidates were added, but ${researchFailures.length} qualification attempts failed` },
+      });
+      return;
+    }
+
+    const decisions = researchResults.filter((result) => result.success && result.decision).map((result) => result.decision!);
     updateJob(jobId, {
       status: "complete",
       completedAt: Date.now(),
-      diagnostics: { batchId, created: created.length, existing: completed.existingRows, duplicate: completed.duplicateRows, invalid: completed.invalidRows, franchise: completed.franchiseRows, screeningFailures, researchQueued: created.length },
-      progress: { stage: "complete", detail: `Done — ${created.length} candidates added; ${created.length} entered the research queue` },
+      diagnostics: shouldResearchImportImmediately(source)
+        ? { batchId, created: created.length, createdLeadIds: created.map((item) => item.id), existing: completed.existingRows, duplicate: completed.duplicateRows, invalid: completed.invalidRows, franchise: completed.franchiseRows, screeningFailures, researchAttempted: researchResults.length, researchSucceeded: researchResults.length, researchFailed: 0, researchResults }
+        : { batchId, created: created.length, createdLeadIds: created.map((item) => item.id), existing: completed.existingRows, duplicate: completed.duplicateRows, invalid: completed.invalidRows, franchise: completed.franchiseRows, screeningFailures, researchQueued: created.length },
+      progress: { stage: "complete", detail: shouldResearchImportImmediately(source)
+        ? created.length === 1
+          ? `Done — candidate added and qualified${decisions[0] ? ` as ${decisions[0].replaceAll("_", " ")}` : ""}`
+          : `Done — ${created.length} candidates added and qualified`
+        : `Done — ${created.length} candidates added; ${created.length} entered the research queue` },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

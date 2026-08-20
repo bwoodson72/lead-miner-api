@@ -10,3 +10,11 @@ test("research projection includes discovery context but excludes My Notes", asy
   assert.doesNotMatch(projection, /outreachNotes/);
   assert.doesNotMatch(projection, /priorityBreakdown/);
 });
+
+test("single URL imports research immediately while CSV imports remain queued", async () => {
+  const source = await readFile(new URL("../src/lib/website-import-routes.ts", import.meta.url), "utf8");
+  assert.match(source, /return source === "manual_url"/);
+  assert.match(source, /await processLeadResearch\(prisma, item\.id\)/);
+  assert.match(source, /researchQueued: created\.length/);
+  assert.match(source, /createdLeadIds: created\.map/);
+});
