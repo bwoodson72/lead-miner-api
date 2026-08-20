@@ -18,6 +18,9 @@ model Lead {
   city String?
   region String?
   adSource String @default("local_organic") @map("ad_source")
+  discoverySource String @default("search") @map("discovery_source")
+  importBatchId Int? @map("import_batch_id")
+  suppliedUrl String? @map("supplied_url") @db.Text
   lighthouseScore Int? @map("lighthouse_score")
   lcp Int?
   cls Float?
@@ -76,6 +79,7 @@ model Lead {
   contacts Contact[]
   emailThreads EmailThread[]
   assetAssessments LeadAssetAssessment[]
+  importBatch ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   @@index([status, priorityScore])
@@ -88,9 +92,33 @@ model Lead {
   @@index([lighthouseScore])
   @@index([screeningStatus])
   @@index([performanceOpportunity])
+  @@index([discoverySource])
+  @@index([importBatchId])
   @@index([isAgencyManaged])
   @@index([isNationalChain])
   @@map("leads")
+}
+
+model ImportBatch {
+  id Int @id @default(autoincrement())
+  source String
+  fileName String? @map("file_name")
+  status String @default("running")
+  totalRows Int @default(0) @map("total_rows")
+  readyRows Int @default(0) @map("ready_rows")
+  createdLeads Int @default(0) @map("created_leads")
+  existingRows Int @default(0) @map("existing_rows")
+  duplicateRows Int @default(0) @map("duplicate_rows")
+  invalidRows Int @default(0) @map("invalid_rows")
+  franchiseRows Int @default(0) @map("franchise_rows")
+  screenedLeads Int @default(0) @map("screened_leads")
+  screeningFailures Int @default(0) @map("screening_failures")
+  createdAt DateTime @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+  leads Lead[]
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@map("import_batches")
 }
 
 model Contact {
