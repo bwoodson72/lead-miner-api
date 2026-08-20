@@ -7,6 +7,7 @@ import {
   researchQueueWhere,
 } from "./research-queue.js";
 import { qualifiedContactWhere } from "./qualified-enrichment.js";
+import { registerWebsiteImportRoutes } from "./website-import-routes.js";
 
 export function resolveContactPipelineState(lead: {
   qualificationDecision: string | null;
@@ -24,6 +25,8 @@ export function resolveContactPipelineState(lead: {
 }
 
 export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClient) {
+  registerWebsiteImportRoutes(app, prisma);
+
   app.get("/api/pipeline/summary", async (_req, res) => {
     try {
       const now = new Date();
@@ -75,6 +78,8 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
           domain: true,
           keyword: true,
           adSource: true,
+          discoverySource: true,
+          importBatchId: true,
           performanceOpportunity: true,
           screeningStatus: true,
           phone: true,
@@ -107,6 +112,9 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
           screeningStatus: true,
           performanceOpportunity: true,
           adSource: true,
+          discoverySource: true,
+          importBatchId: true,
+          suppliedUrl: true,
           businessName: true,
           keyword: true,
           city: true,
@@ -145,6 +153,9 @@ export function registerCandidatePipelineRoutes(app: Express, prisma: PrismaClie
         businessName: lead.businessName,
         status: lead.status,
         adSource: lead.adSource,
+        discoverySource: lead.discoverySource,
+        importBatchId: lead.importBatchId,
+        suppliedUrl: lead.suppliedUrl,
         keyword: lead.keyword,
         city: lead.city,
         region: lead.region,

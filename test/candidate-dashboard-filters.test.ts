@@ -9,6 +9,10 @@ test("lead query exposes candidate pipeline filters without contact gating resea
   assert.match(source, /where\.performanceOpportunity=q\.performanceOpportunity/);
   assert.match(source, /q\.screeningStatus/);
   assert.match(source, /where\.screeningStatus=q\.screeningStatus/);
+  assert.match(source, /q\.discoverySource/);
+  assert.match(source, /where\.discoverySource=q\.discoverySource/);
+  assert.match(source, /q\.importBatchId/);
+  assert.match(source, /where\.importBatchId=Number\(q\.importBatchId\)/);
 
   assert.match(source, /q\.researchState==="researched"/);
   assert.match(source, /where\.lastResearchedAt=\{not:null\}/);

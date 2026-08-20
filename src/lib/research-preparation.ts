@@ -87,7 +87,39 @@ export async function getPreparedLeadForResearch(
   );
   if (!preparation.ready) throw new ResearchPreparationError(preparation);
 
-  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  // Keep the AI research boundary explicit. Persistent operator/My Notes and
+  // outreach state are intentionally excluded; discovery context is safe and
+  // helps research understand why keyword/location metadata may be absent.
+  const lead = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: {
+      id: true,
+      businessName: true,
+      domain: true,
+      landingPageUrl: true,
+      keyword: true,
+      adSource: true,
+      discoverySource: true,
+      suppliedUrl: true,
+      lighthouseScore: true,
+      lcp: true,
+      cls: true,
+      tbt: true,
+      email: true,
+      phone: true,
+      address: true,
+      enrichmentNotes: true,
+      isAgencyManaged: true,
+      agencyName: true,
+      isNationalChain: true,
+      chainReason: true,
+      status: true,
+      qualificationDecision: true,
+      priorityScore: true,
+      researchVersion: true,
+      lastResearchedAt: true,
+    },
+  });
   if (!lead) {
     throw new ResearchPreparationError({
       leadId,
