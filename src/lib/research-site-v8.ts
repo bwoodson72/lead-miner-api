@@ -4,6 +4,7 @@ import {
   mergeWebsitePackets,
   type WebsiteResearchPacket,
 } from "./research-site.js";
+import { analyzeContentDepth, type ContentDepthAssessment } from "./research-content-depth.js";
 import { fetchSearchIndexEvidence, type SearchIndexEvidence } from "./research-index-fallback.js";
 import { fetchWithTlsIssuerRecovery } from "./tls-issuer-recovery.js";
 import { stripStaticHiddenMarkup } from "./research-visible-html.js";
@@ -21,6 +22,7 @@ export type RepresentativePageSummary = {
   wordCount: number;
   hasForm: boolean;
   pageText: string;
+  contentDepth: ContentDepthAssessment;
 };
 
 export type CrawlerAttempt = {
@@ -51,10 +53,18 @@ export type BusinessAssetResearchPacket = WebsiteResearchPacket & {
     warning: string;
   };
   representativePages: RepresentativePageSummary[];
+  contentDepthSummary: {
+    sampledServicePages: number;
+    thinServicePages: number;
+    strongThinServicePages: number;
+    limitedServicePages: number;
+    warning: string;
+  };
   searchIndexEvidence: SearchIndexEvidence;
 };
 
 const COVERAGE_WARNING = "Representative crawling samples a bounded set of same-site pages and sitemap URLs. It improves evidence about site depth but is not a complete crawl. A crawler fetch failure means only that Lead Miner's automated crawler could not inspect the page; it is not evidence that the website is down, offline, unreachable, or inaccessible to normal visitors. Search-index fallback can support page-topic and bounded architecture evidence when direct crawling fails, but index evidence may lag the live site. Absence from this packet is not proof that a page, service, location, or capability does not exist.";
+const CONTENT_DEPTH_WARNING = "Content depth is measured only on directly fetched representative service pages. Substantive word count excludes common page chrome when possible. A low word count alone is not a material defect; strong thin-content evidence requires contextual signals such as a broad multi-service page with very little meaningful service detail.";
 
 function normalizeHost(value: string) {
   try { return new URL(value).hostname.toLowerCase().replace(/^www\./, ""); }
@@ -321,7 +331,19 @@ function representativeCandidates(landing: WebsiteResearchPacket, sitemapUrls: s
 async function summarizePage(row: { url: string; type: RepresentativePageType }): Promise<RepresentativePageSummary> {
   const response = await fetchText(row.url);
   if (!response || !sameHost(response.finalUrl, row.url)) {
-    return { url: row.url, type: row.type, fetchStatus: null, fetchError: "Crawler could not inspect page or it redirected off-site", title: null, h1: [], h2: [], wordCount: 0, hasForm: false, pageText: "" };
+    return {
+      url: row.url,
+      type: row.type,
+      fetchStatus: null,
+      fetchError: "Crawler could not inspect page or it redirected off-site",
+      title: null,
+      h1: [],
+      h2: [],
+      wordCount: 0,
+      hasForm: false,
+      pageText: "",
+      contentDepth: analyzeContentDepth("", row.type, 0),
+    };
   }
 
   const html = stripStaticHiddenMarkup(response.text);
@@ -331,6 +353,7 @@ async function summarizePage(row: { url: string; type: RepresentativePageType })
     .slice(0, 12);
   const title = textOnly(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "") || null;
   const pageText = textOnly(html).slice(0, 7000);
+  const pageWordCount = pageText ? pageText.split(/\s+/).length : 0;
 
   return {
     url: response.finalUrl,
@@ -340,9 +363,10 @@ async function summarizePage(row: { url: string; type: RepresentativePageType })
     title,
     h1: heading(1),
     h2: heading(2),
-    wordCount: pageText ? pageText.split(/\s+/).length : 0,
+    wordCount: pageWordCount,
     hasForm: /<form\b/i.test(html),
     pageText,
+    contentDepth: analyzeContentDepth(html, row.type, pageWordCount),
   };
 }
 
@@ -353,6 +377,17 @@ function emptySearchIndexEvidence(): SearchIndexEvidence {
     pages: [],
     warning: "Search-index fallback was not needed because direct website inspection succeeded.",
     error: null,
+  };
+}
+
+function contentDepthSummary(pages: RepresentativePageSummary[]) {
+  const servicePages = pages.filter((page) => page.type === "service" && page.fetchStatus !== null && !page.fetchError);
+  return {
+    sampledServicePages: servicePages.length,
+    thinServicePages: servicePages.filter((page) => page.contentDepth.rating === "thin").length,
+    strongThinServicePages: servicePages.filter((page) => page.contentDepth.materialityHint === "strong").length,
+    limitedServicePages: servicePages.filter((page) => page.contentDepth.rating === "limited").length,
+    warning: CONTENT_DEPTH_WARNING,
   };
 }
 
@@ -386,6 +421,7 @@ export async function fetchBusinessAssetResearchPacket(url: string): Promise<Bus
         warning: COVERAGE_WARNING,
       },
       representativePages: [],
+      contentDepthSummary: contentDepthSummary([]),
       searchIndexEvidence,
     };
   }
@@ -412,6 +448,7 @@ export async function fetchBusinessAssetResearchPacket(url: string): Promise<Bus
       warning: COVERAGE_WARNING,
     },
     representativePages,
+    contentDepthSummary: contentDepthSummary(representativePages),
     searchIndexEvidence: emptySearchIndexEvidence(),
   };
 }
