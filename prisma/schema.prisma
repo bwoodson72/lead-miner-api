@@ -50,6 +50,8 @@ model Lead {
   primaryOutreachAngleConfidence Float? @map("primary_outreach_angle_confidence")
   primaryOutreachFindingId Int? @map("primary_outreach_finding_id")
   outreachPreparedAt DateTime? @map("outreach_prepared_at")
+  outreachNotes String? @map("outreach_notes") @db.Text
+  outreachNotesUpdatedAt DateTime? @map("outreach_notes_updated_at")
   researchSummary String? @map("research_summary")
   researchVersion String? @map("research_version")
   lastResearchedAt DateTime? @map("last_researched_at")
