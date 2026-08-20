@@ -12,7 +12,7 @@ import {
 } from "../src/lib/ai-followup.js";
 
 test("outreach and follow-up prompt versions reflect stack-free sequence rules", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v18");
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v19");
   assert.equal(FOLLOWUP_PROMPT_VERSION, "followup-v5");
 });
 
