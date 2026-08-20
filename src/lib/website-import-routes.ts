@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { z, ZodError } from "zod";
@@ -46,16 +47,26 @@ function clean(value: string | null | undefined) {
   return trimmed || null;
 }
 
+function assertPublicWebsiteTarget(parsed: URL) {
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (parsed.username || parsed.password) throw new Error("Website URLs cannot contain embedded credentials");
+  if (isIP(hostname)) throw new Error("IP-address URLs are not supported; import the business's public domain instead");
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".lan")) {
+    throw new Error("Local or internal hostnames cannot be imported");
+  }
+}
+
 export function normalizeImportWebsite(raw: string) {
   const supplied = raw.trim();
   if (!supplied) throw new Error("Website is required");
   const candidate = /^[a-z][a-z0-9+.-]*:/i.test(supplied) ? supplied : `https://${supplied}`;
   const parsed = new URL(candidate);
   if (!(["http:", "https:"] as string[]).includes(parsed.protocol)) throw new Error("Only http and https website URLs are supported");
+  assertPublicWebsiteTarget(parsed);
   parsed.hash = "";
   const normalizedUrl = normalizeUrl(parsed.toString());
   const domain = normalizeDomainValue(extractRootDomain(normalizedUrl));
-  if (!domain || !domain.includes(".")) throw new Error("Website must contain a valid domain");
+  if (!domain || !domain.includes(".")) throw new Error("Website must contain a valid public domain");
   return { suppliedUrl: supplied, normalizedUrl, domain };
 }
 
