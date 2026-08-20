@@ -96,3 +96,31 @@ export function applyAssetFindingSafety<T extends AssetFinding>(finding: T): T {
   }
   return finding;
 }
+
+export function enforcePlaceholderQualificationSafety<T extends {
+  decision: string;
+  assetStrength: string;
+  findings: AssetFinding[];
+  decisionReason: string;
+  confidence: number;
+}>(result: T): T {
+  if (result.decision !== "rebuild_candidate") return result;
+
+  const hasPlaceholderFinding = result.findings.some(isUnverifiedPlaceholderFinding);
+  if (!hasPlaceholderFinding) return result;
+
+  const independentlyMaterial = result.findings.some((finding) =>
+    !isUnverifiedPlaceholderFinding(finding)
+    && finding.confidence >= 0.7
+    && finding.significance !== "low",
+  );
+  if (independentlyMaterial) return result;
+
+  return {
+    ...result,
+    decision: "needs_review",
+    assetStrength: "unknown",
+    decisionReason: "Needs review because placeholder or demo text was detected only through non-rendered website extraction. Lead Miner cannot treat that text as a visitor-facing defect or use it to justify a custom rebuild without independent material evidence.",
+    confidence: Math.min(result.confidence, 0.5),
+  };
+}
