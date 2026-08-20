@@ -35,6 +35,9 @@ const SERVICE_TOPICS: Array<{ label: string; pattern: RegExp }> = [
   { label: "decks", pattern: /\bdecks?\b/i },
 ];
 
+const GENERIC_SERVICE_HEADINGS = /^(?:our\s+)?services?|what\s+we\s+do|service\s+overview$/i;
+const CTA_HEADING = /^(?:(?:ready\s+to\s+)?(?:get\s+started|start\s+your\s+project)|contact\s+us|get\s+in\s+touch|learn\s+more|call\s+(?:us\s+)?(?:now|today)?|(?:call|get|request|schedule|book)\b[\s\S]{0,60}\b(?:estimate|quote|consultation|appointment|project)|(?:free\s+)?(?:estimate|quote|consultation))!?$/i;
+
 function decodeHtml(value: string) {
   return value
     .replace(/&nbsp;/gi, " ")
@@ -111,6 +114,14 @@ function serviceTopics(value: string) {
   return SERVICE_TOPICS.filter((topic) => topic.pattern.test(value)).map((topic) => topic.label);
 }
 
+function isServiceDetailHeading(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (GENERIC_SERVICE_HEADINGS.test(normalized)) return false;
+  if (CTA_HEADING.test(normalized)) return false;
+  return true;
+}
+
 export function analyzeContentDepth(
   html: string,
   type: RepresentativeContentType,
@@ -122,7 +133,7 @@ export function analyzeContentDepth(
   const substantiveWordCount = wordCount(substantiveText);
   const shellWordCount = Math.max(0, visibleWholePageWords - substantiveWordCount);
   const meaningfulParagraphCount = elementTexts(substantiveHtml, "p").filter((value) => wordCount(value) >= 8).length;
-  const detailHeadingCount = elementTexts(substantiveHtml, "h2|h3").length;
+  const detailHeadingCount = elementTexts(substantiveHtml, "h2|h3").filter(isServiceDetailHeading).length;
   const meaningfulListItemCount = elementTexts(substantiveHtml, "li").filter((value) => wordCount(value) >= 4).length;
   const topics = serviceTopics(substantiveText);
 
