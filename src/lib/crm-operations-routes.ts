@@ -24,6 +24,8 @@ export function registerCrmOperationsRoutes(app:Express,prisma:PrismaClient){
     const page=Math.max(1,Number(q.page)||1);const pageSize=Math.min(100,Math.max(10,Number(q.pageSize)||50));
     const where:any={};
     if(q.status)where.status=q.status;if(q.qualificationDecision)where.qualificationDecision=q.qualificationDecision;if(q.replyStatus)where.replyStatus=q.replyStatus;
+    if(["search","manual_url","csv_import"].includes(q.discoverySource??""))where.discoverySource=q.discoverySource;
+    if(q.importBatchId&&Number.isInteger(Number(q.importBatchId))&&Number(q.importBatchId)>0)where.importBatchId=Number(q.importBatchId);
     if(["strong","moderate","none","unknown"].includes(q.performanceOpportunity??""))where.performanceOpportunity=q.performanceOpportunity;
     if(["pending","complete","partial","failed"].includes(q.screeningStatus??""))where.screeningStatus=q.screeningStatus;
     if(q.researchState==="researched")where.lastResearchedAt={not:null};
