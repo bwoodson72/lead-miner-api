@@ -12,7 +12,7 @@ import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
 import { estimateAiCost } from "./ai-cost.js";
 import { withAiCapacity } from "./ai-capacity.js";
 import { getContactIdentityRiskReason } from "./contact-safety.js";
-import { withOperatorOutreachNotes } from "./operator-outreach-notes.js";
+import { normalizeOutreachNotes, withOperatorOutreachNotes } from "./operator-outreach-notes.js";
 
 const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate"]);
 
@@ -259,7 +259,16 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   const selectedFinding = assessment.findings.find((finding) => finding.id === findingId);
   if (!selectedFinding) throw new Error("Selected outreach finding is no longer part of the latest assessment");
   const recentCtas = await recentInitialCtas(prisma, leadId);
-  const outreachInstructions = withOperatorOutreachNotes(settings.outreachInstructions, lead.outreachNotes);
+  const operatorNotes = normalizeOutreachNotes(lead.outreachNotes);
+  // Initial outreach receives My Notes as first-class packet context below. Keep this
+  // helper call note-free so campaign instructions can still receive one-time
+  // regeneration guidance without duplicating My Notes as lower-priority preferences.
+  const outreachInstructions = withOperatorOutreachNotes(settings.outreachInstructions, null);
+  const previousDraft = replaceExisting && existing ? {
+    subject: existing.subject,
+    bodyText: existing.bodyText,
+    cta: existing.cta,
+  } : null;
 
   const strategy = {
     observation,
@@ -271,6 +280,8 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
     promptVersion: OUTREACH_PROMPT_VERSION,
     model: settings.outreachModel,
     instructions: outreachInstructions,
+    operatorNotes,
+    previousDraft,
     sender: { name: settings.senderName, email: settings.senderEmail },
     leadId,
     assessmentId: assessment.id,
@@ -316,6 +327,8 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       qualificationDecision: assessment.decision,
       strategy,
       recentCtas,
+      operatorNotes,
+      previousDraft,
       selectedFinding: {
         id: selectedFinding.id,
         category: selectedFinding.category,
@@ -368,6 +381,8 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
             approvalMode: settings.approvalMode,
             promptVersion: OUTREACH_PROMPT_VERSION,
             generationAttempts: generated.attempts,
+            operatorNotesApplied: Boolean(operatorNotes),
+            previousDraftSupplied: Boolean(previousDraft),
             replacedExistingMessageId: replaceExisting ? existing?.id ?? null : null,
           },
         },
