@@ -49,7 +49,7 @@ function clean(value: string | null | undefined) {
 export function normalizeImportWebsite(raw: string) {
   const supplied = raw.trim();
   if (!supplied) throw new Error("Website is required");
-  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(supplied) ? supplied : `https://${supplied}`;
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(supplied) ? supplied : `https://${supplied}`;
   const parsed = new URL(candidate);
   if (!(["http:", "https:"] as string[]).includes(parsed.protocol)) throw new Error("Only http and https website URLs are supported");
   parsed.hash = "";
