@@ -9,16 +9,28 @@ test("telemetry, placeholder, and vendor addresses are blocked", () => {
   assert.equal(isObviousNonProspectEmail("info@realroofer.com"), false);
 });
 
-test("same-domain and ordinary consumer-mail recipients are eligible", () => {
+test("same-domain and consumer-mail recipients are eligible automatically", () => {
   assert.equal(getContactIdentityRiskReason({ email: "info@rturleyroofing.com", domain: "rturleyroofing.com", contacts: [] }), null);
   assert.equal(getContactIdentityRiskReason({ email: "dfwpremiumroofing@yahoo.com", domain: "dfwpremiumroofingandsolar.com", contacts: [] }), null);
+  assert.equal(getContactIdentityRiskReason({ email: "owner@sbcglobal.net", domain: "currentcompany.com", contacts: [] }), null);
 });
 
-test("ordinary custom cross-domain recipients are eligible without identity verification", () => {
-  assert.equal(getContactIdentityRiskReason({ email: "office@reyesroofingllc.com", domain: "thomasroofing.example", contacts: [] }), null);
-  assert.equal(getContactIdentityRiskReason({ email: "owner@oldcompanydomain.com", domain: "currentcompany.com", contacts: [] }), null);
+test("unverified custom cross-domain recipients remain blocked for automation", () => {
+  assert.match(getContactIdentityRiskReason({ email: "office@reyesroofingllc.com", domain: "thomasroofing.example", contacts: [] }) ?? "", /not identity-verified/);
 });
 
-test("obvious provider infrastructure remains blocked even when the domain differs", () => {
-  assert.match(getContactIdentityRiskReason({ email: "support@prophone.com", domain: "targetroofer.com", contacts: [] }) ?? "", /provider infrastructure/);
+test("manual recipient authorization allows a custom cross-domain address", () => {
+  assert.equal(getContactIdentityRiskReason({
+    email: "office@managementco.com",
+    domain: "targetroofer.com",
+    contacts: [{ type: "email", value: "office@managementco.com", isPrimary: true, source: "manual_outreach", verificationStatus: "manually_verified" }],
+  }), null);
+});
+
+test("obvious provider infrastructure cannot be overridden by stored verification", () => {
+  assert.match(getContactIdentityRiskReason({
+    email: "support@prophone.com",
+    domain: "targetroofer.com",
+    contacts: [{ type: "email", value: "support@prophone.com", isPrimary: true, source: "manual_outreach", verificationStatus: "manually_verified" }],
+  }) ?? "", /provider infrastructure/);
 });
