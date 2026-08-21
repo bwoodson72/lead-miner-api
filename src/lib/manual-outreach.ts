@@ -12,7 +12,7 @@ const MANUAL_GENERATION_REASON = "Generated manually from My Notes";
 export function manualOutreachNotesEligibilityReason(notes: string | null | undefined) {
   return normalizeOutreachNotes(notes)
     ? null
-    : "Add My Notes before manually preparing outreach for a lead that research did not qualify.";
+    : "Add My Notes before manually preparing outreach from them.";
 }
 
 async function recentInitialCtas(prisma: PrismaClient, leadId: number) {
@@ -70,7 +70,7 @@ export async function ensureManualOutreachDraftFromNotes(prisma: PrismaClient, l
   } : null;
   const recentCtas = await recentInitialCtas(prisma, leadId);
 
-  const manualInstructions = `${settings.outreachInstructions.trim()}\n\nMANUAL OPERATOR OUTREACH\nBrian explicitly chose to contact this lead even though automated research did not produce a rebuild qualification. My Notes below are the primary factual basis for this one manual outreach draft. Use the observation in My Notes directly and do not invent additional website findings. Do not change, discuss, or imply a different stored qualification decision.\n<operator_notes>\n${operatorNotes}\n</operator_notes>`;
+  const manualInstructions = `${settings.outreachInstructions.trim()}\n\nMANUAL OPERATOR OUTREACH\nBrian explicitly chose My Notes as the primary factual basis for this outreach draft. Use the observation in My Notes directly and do not invent additional website findings. My Notes are authoritative for prospect-facing outreach if they conflict with research. Do not change, discuss, or imply a different stored qualification decision.\n<operator_notes>\n${operatorNotes}\n</operator_notes>`;
   const strategy = {
     observation: operatorNotes!,
     ownerStake: "Explain one simple, plausible business consequence of the operator's observation without claiming known lost customers, leads, revenue, rankings, or conversions.",

@@ -2,6 +2,7 @@ import type { Express } from "express";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { z, ZodError } from "zod";
 import { ensureInitialOutreachDraft, prepareLeadForOutreach, prioritizeLead, selectLeadOutreachAngle } from "./outreach-preparation.js";
+import { setLeadOutreachSelection } from "./outreach-selection.js";
 import { registerSettingsRoutes } from "./settings-routes.js";
 import { sendApprovedMessage, sendApprovedQueue } from "./outreach-sending.js";
 import { registerFollowupReplyRoutes } from "./followup-reply-routes.js";
@@ -31,6 +32,11 @@ const MaintenanceRegenerateSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
   force: z.boolean().default(false),
 });
+const OutreachSelectionSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("auto") }),
+  z.object({ mode: z.literal("notes") }),
+  z.object({ mode: z.literal("finding"), findingId: z.number().int().positive() }),
+]);
 
 function invalid(res: any, error: ZodError) { res.status(400).json({ error: "Invalid request", issues: error.issues }); }
 
@@ -65,6 +71,14 @@ export function registerOutreachRoutes(app: Express, prisma: PrismaClient) {
   app.post("/api/leads/:id/outreach/angle", async (req, res) => {
     const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
     try { res.json(await selectLeadOutreachAngle(prisma, id, req.body?.force === true)); } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.patch("/api/leads/:id/outreach/selection", async (req, res) => {
+    const id = Number(req.params["id"]); if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid lead id" }); return; }
+    let parsed: z.infer<typeof OutreachSelectionSchema>;
+    try { parsed = OutreachSelectionSchema.parse(req.body ?? {}); } catch (error) { if (error instanceof ZodError) { invalid(res, error); return; } throw error; }
+    try { res.json(await setLeadOutreachSelection(prisma, id, parsed)); }
+    catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
   app.post("/api/leads/:id/outreach/generate", async (req, res) => {

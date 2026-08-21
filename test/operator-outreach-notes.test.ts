@@ -7,12 +7,12 @@ test("blank My Notes are ignored", () => {
   assert.equal(withOperatorOutreachNotes("Base instructions", "   "), "Base instructions");
 });
 
-test("My Notes are appended as private message-writing context only", () => {
-  const result = withOperatorOutreachNotes("Base instructions", "Lead with the stale commercial roofing portfolio.");
+test("My Notes guide outreach selection without changing qualification or priority", () => {
+  const result = withOperatorOutreachNotes("Base instructions", "Lead with the stale commercial roofing portfolio. Don't lead with speed.");
   assert.match(result, /MY NOTES/);
-  assert.match(result, /persistent human context for wording and emphasis after qualification/);
+  assert.match(result, /authoritative operator context for outreach selection, wording, and emphasis/);
   assert.match(result, /never change research, qualification, priority, or the stored qualification decision/);
-  assert.match(result, /do not select the outreach angle/);
+  assert.match(result, /If they say not to lead with a topic, do not lead with it/);
   assert.match(result, /stale commercial roofing portfolio/);
   assert.match(result, /Do not quote the notes mechanically/);
 });
