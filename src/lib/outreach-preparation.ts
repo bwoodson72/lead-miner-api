@@ -6,6 +6,7 @@ import {
   encodeOutreachPsychology,
   selectOutreachAngle,
   OUTREACH_ANGLE_PROMPT_VERSION,
+  type OutreachSelectionSource,
 } from "./ai-outreach-angle.js";
 import { generateOutreachDraft, OUTREACH_PROMPT_VERSION, outreachDraftNeedsRegeneration } from "./ai-outreach.js";
 import { assertAiBudgetAvailable, hashAiPacket } from "./ai-budget.js";
@@ -13,6 +14,7 @@ import { estimateAiCost } from "./ai-cost.js";
 import { withAiCapacity } from "./ai-capacity.js";
 import { getContactIdentityRiskReason } from "./contact-safety.js";
 import { normalizeOutreachNotes, withOperatorOutreachNotes } from "./operator-outreach-notes.js";
+import { ensureManualOutreachDraftFromNotes } from "./manual-outreach.js";
 
 const QUALIFIED_ASSET_DECISIONS = new Set(["rebuild_candidate"]);
 
@@ -75,12 +77,54 @@ export async function prioritizeLead(prisma: PrismaClient, leadId: number) {
   return priority;
 }
 
-export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: number, force = false) {
+export type LeadOutreachAngleOptions = {
+  preferredFindingId?: number;
+  selectionSource?: Extract<OutreachSelectionSource, "auto" | "operator">;
+};
+
+function storedAngleResult(lead: any, packetHash = "operator-selection") {
+  const psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+  if (!psychology || !lead.primaryOutreachAngle) return null;
+  return {
+    reused: true,
+    findingId: lead.primaryOutreachFindingId ?? 0,
+    observation: lead.primaryOutreachAngle,
+    angle: lead.primaryOutreachAngle,
+    ownerStake: psychology.ownerStake,
+    buyerMoment: psychology.buyerMoment,
+    psychologicalLever: psychology.psychologicalLever,
+    confidence: lead.primaryOutreachAngleConfidence ?? 1,
+    rationale: psychology.rationale ?? "Operator-selected outreach basis",
+    packetHash,
+    selectionSource: psychology.selectionSource,
+  };
+}
+
+export async function selectLeadOutreachAngle(
+  prisma: PrismaClient,
+  leadId: number,
+  force = false,
+  options: LeadOutreachAngleOptions = {},
+) {
   const settings = await getAppSettings(prisma);
   const { lead, assessment } = await loadOpportunity(prisma, leadId);
-  const findings = assessment.findings.filter((finding) => finding.confidence >= settings.minProblemConfidence);
-  if (!findings.length) throw new Error("No material finding meets the configured outreach confidence threshold");
+  const storedPsychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
 
+  if (!options.preferredFindingId && storedPsychology && ["operator", "operator_notes"].includes(storedPsychology.selectionSource)) {
+    const stored = storedAngleResult(lead);
+    if (stored) return stored;
+  }
+
+  const findings = options.preferredFindingId
+    ? assessment.findings.filter((finding) => finding.id === options.preferredFindingId)
+    : assessment.findings.filter((finding) => finding.confidence >= settings.minProblemConfidence);
+  if (!findings.length) {
+    if (options.preferredFindingId) throw new Error("The selected finding is not part of the latest assessment");
+    throw new Error("No material finding meets the configured outreach confidence threshold");
+  }
+
+  const operatorNotes = normalizeOutreachNotes(lead.outreachNotes);
+  const selectionSource = options.selectionSource ?? "auto";
   const packet = {
     promptVersion: OUTREACH_ANGLE_PROMPT_VERSION,
     model: settings.outreachModel,
@@ -88,6 +132,9 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
     assessmentId: assessment.id,
     decision: assessment.decision,
     adSource: lead.adSource,
+    operatorNotes,
+    preferredFindingId: options.preferredFindingId ?? null,
+    selectionSource,
     findings: findings.map((finding) => ({
       id: finding.id,
       category: finding.category,
@@ -100,22 +147,26 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
     })),
   };
   const packetHash = hashAiPacket(packet);
-  if (!force && lead.primaryOutreachAngle && lead.primaryOutreachFindingId) {
+
+  if (!force && selectionSource === "auto" && lead.primaryOutreachAngle && lead.primaryOutreachFindingId) {
     const identical = await prisma.aIJob.findFirst({
       where: { leadId, type: "outreach_angle", packetHash, status: "complete" },
       orderBy: { createdAt: "desc" },
     });
     const psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
-    if (identical && psychology) {
+    if (identical && psychology && psychology.version === OUTREACH_ANGLE_PROMPT_VERSION && psychology.selectionSource === "auto") {
       return {
         reused: true,
         findingId: lead.primaryOutreachFindingId,
         observation: lead.primaryOutreachAngle,
         angle: lead.primaryOutreachAngle,
-        ...psychology,
+        ownerStake: psychology.ownerStake,
+        buyerMoment: psychology.buyerMoment,
+        psychologicalLever: psychology.psychologicalLever,
         confidence: lead.primaryOutreachAngleConfidence ?? 0,
-        rationale: lead.primaryOutreachAngleReason ?? "Previously selected from identical evidence",
+        rationale: psychology.rationale ?? "Previously selected from identical evidence",
         packetHash,
+        selectionSource: psychology.selectionSource,
       };
     }
   }
@@ -141,6 +192,8 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
       decision: assessment.decision,
       assetStrength: assessment.assetStrength,
       researchSummary: assessment.researchSummary,
+      operatorNotes,
+      preferredFindingId: options.preferredFindingId ?? null,
       findings: findings.map((finding) => ({
         id: finding.id,
         category: finding.category,
@@ -152,7 +205,7 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
         evidenceSources: finding.evidenceSources,
       })),
     }, settings.outreachModel));
-    const encodedPsychology = encodeOutreachPsychology(generated.result);
+    const encodedPsychology = encodeOutreachPsychology(generated.result, selectionSource);
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id: leadId },
@@ -178,6 +231,8 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
             rationale: generated.result.rationale,
             model: generated.model,
             promptVersion: OUTREACH_ANGLE_PROMPT_VERSION,
+            selectionSource,
+            operatorNotesApplied: Boolean(operatorNotes),
           },
         },
       });
@@ -194,7 +249,7 @@ export async function selectLeadOutreachAngle(prisma: PrismaClient, leadId: numb
         },
       });
     });
-    return { reused: false, ...generated.result, angle: generated.result.observation, packetHash };
+    return { reused: false, ...generated.result, angle: generated.result.observation, packetHash, selectionSource };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await prisma.aIJob.update({ where: { id: job.id }, data: { status: "failed", error: message, completedAt: new Date() } });
@@ -228,6 +283,11 @@ export function canReuseExistingInitialOutreach(existing: {
 export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: number, force = false) {
   const settings = await getAppSettings(prisma);
   const { lead, assessment } = await loadOpportunity(prisma, leadId);
+  const storedPsychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+  if (storedPsychology?.selectionSource === "operator_notes") {
+    return ensureManualOutreachDraftFromNotes(prisma, leadId, force);
+  }
+
   const contactRisk = getContactIdentityRiskReason(lead);
   if (contactRisk) throw new Error(contactRisk);
   const existing = await prisma.outreachMessage.findFirst({
@@ -245,14 +305,19 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   let observation = lead.primaryOutreachAngle;
   let findingId = lead.primaryOutreachFindingId;
   let psychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
-  if (!observation || !findingId || !psychology) {
+  const operatorLocked = psychology?.selectionSource === "operator";
+  const staleAutomaticAngle = Boolean(psychology && psychology.selectionSource === "auto" && psychology.version !== OUTREACH_ANGLE_PROMPT_VERSION);
+  if (!observation || !findingId || !psychology || (!operatorLocked && staleAutomaticAngle)) {
     const refreshed = await selectLeadOutreachAngle(prisma, leadId, true);
     observation = refreshed.observation;
     findingId = refreshed.findingId;
     psychology = {
+      version: OUTREACH_ANGLE_PROMPT_VERSION,
+      selectionSource: refreshed.selectionSource ?? "auto",
       ownerStake: refreshed.ownerStake,
       buyerMoment: refreshed.buyerMoment,
       psychologicalLever: refreshed.psychologicalLever,
+      rationale: refreshed.rationale ?? null,
     };
   }
 
@@ -260,9 +325,6 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   if (!selectedFinding) throw new Error("Selected outreach finding is no longer part of the latest assessment");
   const recentCtas = await recentInitialCtas(prisma, leadId);
   const operatorNotes = normalizeOutreachNotes(lead.outreachNotes);
-  // Initial outreach receives My Notes as first-class packet context below. Keep this
-  // helper call note-free so campaign instructions can still receive one-time
-  // regeneration guidance without duplicating My Notes as lower-priority preferences.
   const outreachInstructions = withOperatorOutreachNotes(settings.outreachInstructions, null);
   const previousDraft = replaceExisting && existing ? {
     subject: existing.subject,
@@ -340,6 +402,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
       },
     }, settings.outreachModel, settings.minProblemConfidence, outreachInstructions));
     const shouldAutoApprove = settings.approvalMode === "auto_safe"
+      && psychology.selectionSource === "auto"
       && (lead.priorityScore ?? 0) >= settings.minAutoApprovePriority
       && generated.draft.confidence >= settings.minAutoApproveConfidence
       && !generated.draft.requiresReview;
@@ -358,7 +421,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
           angle: generated.draft.angle,
           cta: generated.draft.cta,
           confidence: generated.draft.confidence,
-          requiresReview: generated.draft.requiresReview,
+          requiresReview: psychology.selectionSource === "operator" ? true : generated.draft.requiresReview,
           generationReason: force ? "Regenerated by operator request" : notesChangedAfterDraft ? "Regenerated because operator outreach notes changed" : replaceExisting ? "Regenerated because stored draft was stale or failed current rules" : null,
           promptVersion: OUTREACH_PROMPT_VERSION,
           status,
@@ -373,10 +436,11 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
           summary: `${shouldAutoApprove ? "Auto-approved" : "Generated"} initial outreach: ${generated.draft.subject}`,
           metadata: {
             confidence: generated.draft.confidence,
-            requiresReview: generated.draft.requiresReview,
+            requiresReview: psychology.selectionSource === "operator" ? true : generated.draft.requiresReview,
             findingId: selectedFinding.id,
             qualificationDecision: assessment.decision,
             psychologicalLever: psychology.psychologicalLever,
+            selectionSource: psychology.selectionSource,
             model: generated.model,
             approvalMode: settings.approvalMode,
             promptVersion: OUTREACH_PROMPT_VERSION,
@@ -440,7 +504,9 @@ export async function prepareLeadForOutreach(
     });
     return { priority, angle: null, draft: null, held: true };
   }
-  if (!settings.autoSelectOutreachAngle && !options.forceAngle) return { priority, angle: null, draft: null, held: false };
+  const storedPsychology = decodeOutreachPsychology(lead.primaryOutreachAngleReason);
+  const operatorSelected = Boolean(storedPsychology && ["operator", "operator_notes"].includes(storedPsychology.selectionSource));
+  if (!settings.autoSelectOutreachAngle && !options.forceAngle && !operatorSelected) return { priority, angle: null, draft: null, held: false };
   const angle = await selectLeadOutreachAngle(prisma, leadId, options.forceAngle ?? false);
   const shouldDraft = options.generateDraft ?? settings.autoDraftOutreach;
   const draft = shouldDraft ? await ensureInitialOutreachDraft(prisma, leadId, options.forceDraft ?? false) : null;
