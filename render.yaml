@@ -1,0 +1,14 @@
+services:
+  - type: cron
+    name: lead-miner-automation-tick
+    runtime: node
+    branch: master
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm run automation:tick
+    schedule: "*/10 * * * *"
+    envVars:
+      - key: LEAD_MINER_API_URL
+        value: https://lead-gen-api-xtjm.onrender.com
+      - key: CRON_SECRET
+        sync: false
