@@ -14,14 +14,11 @@ test("same-domain and ordinary consumer-mail recipients are eligible", () => {
   assert.equal(getContactIdentityRiskReason({ email: "dfwpremiumroofing@yahoo.com", domain: "dfwpremiumroofingandsolar.com", contacts: [] }), null);
 });
 
-test("unverified custom cross-domain recipients are blocked", () => {
-  assert.match(getContactIdentityRiskReason({ email: "office@reyesroofingllc.com", domain: "thomasroofing.example", contacts: [] }) ?? "", /not identity-verified/);
+test("ordinary custom cross-domain recipients are eligible without identity verification", () => {
+  assert.equal(getContactIdentityRiskReason({ email: "office@reyesroofingllc.com", domain: "thomasroofing.example", contacts: [] }), null);
+  assert.equal(getContactIdentityRiskReason({ email: "owner@oldcompanydomain.com", domain: "currentcompany.com", contacts: [] }), null);
 });
 
-test("strong stored identity verification can allow a custom cross-domain recipient", () => {
-  assert.equal(getContactIdentityRiskReason({
-    email: "office@managementco.com",
-    domain: "targetroofer.com",
-    contacts: [{ type: "email", value: "office@managementco.com", isPrimary: true, source: "email_enrichment", verificationStatus: "identity_verified" }],
-  }), null);
+test("obvious provider infrastructure remains blocked even when the domain differs", () => {
+  assert.match(getContactIdentityRiskReason({ email: "support@prophone.com", domain: "targetroofer.com", contacts: [] }) ?? "", /provider infrastructure/);
 });

@@ -26,12 +26,20 @@ const BLOCKED_SEND_STATUSES = new Set([
   "closed_no_response",
 ]);
 
+const EXPLICIT_OUTREACH_SEQUENCE_STATUSES = new Set([
+  "ready_for_outreach",
+  "contacted",
+  "followup_due",
+]);
+
 export function getSendIneligibilityReason(lead: SendEligibilityLead): string | null {
   if (!lead.email) return "Lead has no email address";
   const contactRisk = getContactIdentityRiskReason(lead);
   if (contactRisk) return contactRisk;
   if (lead.replyStatus || lead.lastReplyAt) return "Lead has already replied";
-  if (lead.qualificationDecision && lead.qualificationDecision !== "rebuild_candidate") return `Lead decision ${lead.qualificationDecision} is not send-eligible`;
+  if (lead.qualificationDecision && lead.qualificationDecision !== "rebuild_candidate" && !EXPLICIT_OUTREACH_SEQUENCE_STATUSES.has(lead.status)) {
+    return `Lead decision ${lead.qualificationDecision} is not send-eligible`;
+  }
   if (BLOCKED_SEND_STATUSES.has(lead.status)) return `Lead status ${lead.status} is not send-eligible`;
   const email = lead.email.toLowerCase();
   const domain = lead.domain.toLowerCase();

@@ -10,9 +10,14 @@ test("eligible lead is allowed to send", () => {
   assert.equal(getSendIneligibilityReason(eligibleLead()), null);
 });
 
-test("explicit non-rebuild qualification blocks sending while null legacy decisions remain allowed", () => {
-  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "no_material_opportunity" }) ?? "", /decision no_material_opportunity is not send-eligible/);
-  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "needs_review" }) ?? "", /decision needs_review is not send-eligible/);
+test("explicitly prepared manual outreach can send without rewriting the research decision", () => {
+  assert.equal(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "no_material_opportunity", status: "ready_for_outreach" }), null);
+  assert.equal(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "needs_review", status: "contacted" }), null);
+});
+
+test("non-rebuild decisions remain blocked before an explicit outreach sequence starts", () => {
+  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "no_material_opportunity", status: "disqualified" }) ?? "", /decision no_material_opportunity is not send-eligible/);
+  assert.match(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: "needs_review", status: "research_pending" }) ?? "", /decision needs_review is not send-eligible/);
   assert.equal(getSendIneligibilityReason({ ...eligibleLead(), qualificationDecision: null }), null);
 });
 

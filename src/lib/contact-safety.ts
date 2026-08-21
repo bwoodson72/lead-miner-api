@@ -1,5 +1,3 @@
-import { domainsMatch } from "./enrichment-identity.js";
-
 export type ContactSafetyEvidence = {
   type: string;
   value: string;
@@ -14,39 +12,12 @@ export type ContactSafetyLead = {
   contacts?: ContactSafetyEvidence[];
 };
 
-const PUBLIC_MAIL_DOMAINS = new Set([
-  "gmail.com",
-  "googlemail.com",
-  "yahoo.com",
-  "outlook.com",
-  "hotmail.com",
-  "live.com",
-  "msn.com",
-  "aol.com",
-  "icloud.com",
-  "me.com",
-  "mac.com",
-  "proton.me",
-  "protonmail.com",
-]);
-
 const HARD_BLOCKED_CONTACT_DOMAINS = [
   /(^|\.)sentry\.io$/i,
   /(^|\.)sentry-next\.wixpress\.com$/i,
   /(^|\.)wixpress\.com$/i,
   /(^|\.)prophone\.com$/i,
 ];
-
-const VERIFIED_CONTACT_STATUSES = new Set([
-  "identity_verified",
-  "identity_verified_search",
-  "manually_verified",
-  "verified",
-]);
-
-function normalizeDomain(value: string) {
-  return value.trim().toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
-}
 
 export function isObviousNonProspectEmail(email: string): boolean {
   const normalized = email.trim().toLowerCase();
@@ -64,18 +35,14 @@ export function getContactIdentityRiskReason(lead: ContactSafetyLead): string | 
   if (!email) return "Lead has no email address";
   if (isObviousNonProspectEmail(email)) return `Recipient address ${email} looks like placeholder, telemetry, or service-provider infrastructure`;
 
-  const emailDomain = email.split("@")[1];
-  if (!emailDomain) return `Recipient address ${email} is malformed`;
-  if (domainsMatch(emailDomain, normalizeDomain(lead.domain))) return null;
-  if (PUBLIC_MAIL_DOMAINS.has(normalizeDomain(emailDomain))) return null;
+  const parts = email.split("@");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return `Recipient address ${email} is malformed`;
 
-  const evidence = (lead.contacts ?? []).find((contact) =>
-    contact.type === "email"
-    && contact.value.trim().toLowerCase() === email
-    && contact.isPrimary !== false
-    && VERIFIED_CONTACT_STATUSES.has(contact.verificationStatus ?? ""),
-  );
-  if (evidence) return null;
-
-  return `Cross-domain recipient ${email} is not identity-verified for ${normalizeDomain(lead.domain)}`;
+  // A domain mismatch is not, by itself, evidence that the address belongs to the
+  // wrong business. Small businesses commonly use consumer mailboxes, legacy
+  // domains, parent-company domains, and other valid cross-domain addresses.
+  // Keep blocking addresses that are independently recognizable as placeholders
+  // or provider infrastructure, but do not require domain matching or a stored
+  // identity-verification record merely to prepare, approve, or send outreach.
+  return null;
 }
