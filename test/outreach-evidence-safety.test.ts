@@ -24,8 +24,8 @@ import {
   subjectNeedsRegeneration,
 } from "../src/lib/ai-outreach.js";
 
-test("outreach prompt version is v19", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v19");
+test("outreach prompt version is v20", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v20");
 });
 
 test("outreach drafting refuses to call AI when no vetted finding survives", async () => {
@@ -110,7 +110,7 @@ test("initial outreach is generated only for custom rebuild candidates", async (
   );
 });
 
-test("representative simple-cleanup outreach is rejected by deterministic draft safety", () => {
+test("simple-cleanup language detector remains available to follow-up safety", () => {
   assert.equal(containsMinimizingRemediation("A simple cleanup—one primary phone, one monitored email, and consistent contact details across the site—could make it easier for prospects to reach you."), true);
 });
 
@@ -118,7 +118,7 @@ test("problem-and-reply framing is not rejected as trivial remediation", () => {
   assert.equal(containsMinimizingRemediation("I noticed the site gives people conflicting contact information, which can make someone hesitate before calling. Want me to send over what I found?"), false);
 });
 
-test("neutral greeting is allowed and preserved", () => {
+test("neutral greeting helper recognizes and preserves a neutral greeting", () => {
   const body = "Hi,\n\nThe site shows conflicting contact information in several places, which can create uncertainty before someone reaches out.";
   assert.equal(hasNeutralGreeting(body), true);
   assert.equal(hasUnverifiedSalutation(body), false);
@@ -138,7 +138,7 @@ test("placeholder identities and template tokens are rejected", () => {
   assert.equal(containsPlaceholderText("I reviewed Acme Roofing's site."), true);
 });
 
-test("generic cold-email filler openings are rejected", () => {
+test("generic cold-email opening detector remains available to follow-up safety", () => {
   assert.equal(containsGenericOpening("I wanted to reach out about your website."), true);
   assert.equal(containsGenericOpening("I came across your website and wanted to connect."), true);
   assert.equal(containsGenericOpening("I took a look at the Weatherford page and noticed it takes a while to show up."), false);
@@ -148,8 +148,8 @@ test("existing drafts with fabricated team greetings require regeneration", () =
   assert.equal(outreachDraftNeedsRegeneration("Hi Acme Roofing team,\n\nThe site makes the estimate path harder to follow than it needs to be.", "Website question"), true);
 });
 
-test("existing drafts without a neutral greeting require regeneration", () => {
-  assert.equal(outreachDraftNeedsRegeneration("The mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.", "Weatherford page"), true);
+test("greeting style is prompt-owned for current initial drafts", () => {
+  assert.equal(outreachDraftNeedsRegeneration("The mobile service page takes long enough to become usable that someone comparing roofers could reasonably return to the search results instead of waiting.", "Weatherford page"), false);
 });
 
 test("agreed human Touch 1 voice remains acceptable", () => {
@@ -165,30 +165,30 @@ test("sender identity accepts varied natural web-development context", () => {
   assert.equal(containsSenderIdentity("This stood out to me.", "Brian Woodson"), false);
 });
 
-test("prospect-facing consultant jargon is rejected", () => {
+test("prospect-facing consultant jargon detector remains available", () => {
   assert.equal(containsConsultantJargon("This material limitation weakens the acquisition asset."), true);
   assert.equal(containsConsultantJargon("Someone comparing roofers may leave before reaching the estimate form."), false);
 });
 
-test("analyst-style campaign language is rejected", () => {
+test("analyst-style campaign language detector remains available", () => {
   assert.equal(containsArtificialOutreachLanguage("Could we look at where that delay is affecting the customer journey?"), true);
   assert.equal(containsArtificialOutreachLanguage("The first-visit friction may affect prospective customers."), true);
   assert.equal(containsArtificialOutreachLanguage("I noticed the estimate form takes a while to show up."), false);
 });
 
-test("audit-diagnosis language is not used as the Touch 1 offer", () => {
+test("audit-diagnosis language detector remains available", () => {
   assert.equal(containsAuditDiagnosisLanguage("I noted what may be contributing and where it affects the page."), true);
   assert.equal(containsAuditDiagnosisLanguage("I can send over what I noticed."), false);
   assert.equal(ctaNeedsRegeneration("Want me to send what may be causing it?"), true);
 });
 
-test("technical audit language is never prospect-facing", () => {
+test("technical audit language detector remains available", () => {
   assert.equal(containsTechnicalAuditLanguage("The page has an LCP problem in Lighthouse."), true);
   assert.equal(containsTechnicalAuditLanguage("PageSpeed shows a 7200 ms delay."), true);
   assert.equal(containsTechnicalAuditLanguage("The page takes a pretty long time to show up."), false);
 });
 
-test("human-readable elapsed time is allowed while tool-like measurements stay private", () => {
+test("human-readable elapsed time helper distinguishes tool-like measurements", () => {
   assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took about seven seconds to appear."), false);
   assert.equal(containsProspectFacingPerformanceMeasurement("The homepage took 7.1 seconds to appear."), false);
   assert.equal(containsProspectFacingPerformanceMeasurement("It took close to a minute before the main content appeared."), false);
@@ -200,7 +200,7 @@ test("human-readable elapsed time is allowed while tool-like measurements stay p
   assert.equal(outreachDraftNeedsRegeneration(body, "CLC Roofing homepage", "Want me to send over what I noticed?"), false);
 });
 
-test("existing-site optimization and page-builder service offers are rejected", () => {
+test("existing-site offer detector remains available", () => {
   assert.equal(containsDisallowedExistingSiteServiceOffer("I can optimize the current site."), true);
   assert.equal(containsDisallowedExistingSiteServiceOffer("Want me to fix the existing homepage?"), true);
   assert.equal(containsDisallowedExistingSiteServiceOffer("I can tune the WordPress site."), true);
@@ -208,7 +208,7 @@ test("existing-site optimization and page-builder service offers are rejected", 
   assert.equal(containsDisallowedExistingSiteServiceOffer("Want me to send over what I found?"), false);
 });
 
-test("Touch 1 rejects meeting and existing-site service asks but allows tiny permission asks", () => {
+test("CTA helper still recognizes legacy Touch 1 restrictions for follow-up compatibility", () => {
   assert.equal(ctaNeedsRegeneration("Invite a brief consultation about improving the homepage experience."), true);
   assert.equal(ctaNeedsRegeneration("Would you be open to a quick conversation about it?"), true);
   assert.equal(ctaNeedsRegeneration("Could we schedule 15 minutes to look at it?"), true);
@@ -219,13 +219,13 @@ test("Touch 1 rejects meeting and existing-site service asks but allows tiny per
   assert.equal(ctaNeedsRegeneration("Does that match what you've noticed?"), false);
 });
 
-test("CTA diversity is evaluated against recent campaign copy instead of banning a phrase globally", () => {
+test("CTA similarity helper still detects repeated campaign copy", () => {
   assert.equal(ctaTooSimilarToRecent("Want me to send over what I found?", ["Want me to send over the details?"]), true);
   assert.equal(ctaTooSimilarToRecent("Should I send the details?", ["Want me to send over what I found?"]), false);
   assert.equal(ctaNeedsRegeneration("Would it be useful to see what I found?"), false);
 });
 
-test("subjects stay mundane, short, and specific", () => {
+test("subject helper still recognizes legacy style restrictions", () => {
   assert.equal(subjectNeedsRegeneration("Weatherford roofing page"), false);
   assert.equal(subjectNeedsRegeneration("Estimate form"), false);
   assert.equal(subjectNeedsRegeneration("Quick question"), true);
@@ -234,8 +234,9 @@ test("subjects stay mundane, short, and specific", () => {
   assert.equal(subjectNeedsRegeneration("An urgent opportunity to improve your roofing website today"), true);
 });
 
-test("stored drafts use current human-language and Touch 1 CTA validation", () => {
+test("stored initial drafts are invalidated for evidence hazards, not CTA style", () => {
   const body = "Hi,\n\nI noticed the estimate form takes a while to show up. Someone comparing roofers may go back to the search results instead of waiting.\n\nI build custom websites for service businesses, so this stood out to me.\n\nWant me to send over what I found?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate form", "Would you be open to a quick conversation about it?"), true);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate form", "Would you be open to a quick conversation about it?"), false);
   assert.equal(outreachDraftNeedsRegeneration(body, "Estimate form", "Want me to send over what I found?"), false);
+  assert.equal(outreachDraftNeedsRegeneration("Hi [First Name],\n\nI noticed the estimate form takes a while to show up.", "Estimate form", "Want the details?"), true);
 });
