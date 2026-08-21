@@ -11,12 +11,12 @@ import {
   followUpSequenceGuidance,
 } from "../src/lib/ai-followup.js";
 
-test("outreach and follow-up prompt versions reflect stack-free sequence rules", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v19");
+test("outreach and follow-up prompt versions reflect current sequence rules", () => {
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v20");
   assert.equal(FOLLOWUP_PROMPT_VERSION, "followup-v5");
 });
 
-test("implementation details are blocked from prospect-facing copy", () => {
+test("implementation detail detector remains available to follow-up safety", () => {
   assert.equal(containsProspectFacingImplementationStack("I build websites with Astro."), true);
   assert.equal(containsProspectFacingImplementationStack("The site would be built with Astro."), true);
   assert.equal(containsProspectFacingImplementationStack("Your WordPress site has several service pages."), true);
@@ -27,9 +27,9 @@ test("implementation details are blocked from prospect-facing copy", () => {
   assert.equal(containsProspectFacingImplementationStack("The next step should be clear."), false);
 });
 
-test("Touch 1 drafts with stack language require regeneration", () => {
+test("Touch 1 stack wording is controlled by the editable prompt rather than stored-draft validation", () => {
   const body = "Hi,\n\nI noticed the estimate path changes from page to page. Someone comparing roofers may choose the site that makes the next step clearer.\n\nI build websites with Astro for service businesses, so this stood out to me.\n\nWant me to send over what I found?\n\nBrian";
-  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Want me to send over what I found?"), true);
+  assert.equal(outreachDraftNeedsRegeneration(body, "Estimate path", "Want me to send over what I found?"), false);
 });
 
 test("follow-up safety does not require a new greeting and allows grounded human timing", () => {
