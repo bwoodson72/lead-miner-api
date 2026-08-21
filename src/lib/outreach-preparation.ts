@@ -333,7 +333,7 @@ export async function ensureInitialOutreachDraft(prisma: PrismaClient, leadId: n
   } : null;
 
   const strategy = {
-    observation,
+    observation: observation!,
     ownerStake: psychology.ownerStake,
     buyerMoment: psychology.buyerMoment,
     psychologicalLever: psychology.psychologicalLever,
