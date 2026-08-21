@@ -8,7 +8,7 @@ import {
 import { buildHardOutreachRules } from "../src/lib/outreach-policy.js";
 
 test("new outreach prompt version invalidates old initial drafts", () => {
-  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v19");
+  assert.equal(OUTREACH_PROMPT_VERSION, "outreach-draft-v20");
 });
 
 test("Touch 1 does not require a sender-service sentence", () => {

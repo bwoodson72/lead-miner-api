@@ -27,15 +27,15 @@ test("stale initial draft is regenerated even when not explicitly forced", () =>
   }), false);
 });
 
-test("current-version draft that fails current Touch 1 CTA rules is regenerated", () => {
-  const invalidBody = safeBody.replace("Want me to send over what I noticed?", "Would you be open to a quick conversation about improving that experience?");
+test("current-version initial draft is not invalidated by CTA style choices", () => {
+  const alternateBody = safeBody.replace("Want me to send over what I noticed?", "Would you be open to a quick conversation about improving that experience?");
   assert.equal(canReuseExistingInitialOutreach({
     status: "draft",
     promptVersion: OUTREACH_PROMPT_VERSION,
     subject: "Homepage load",
-    bodyText: invalidBody,
+    bodyText: alternateBody,
     cta: "Would you be open to a quick conversation about improving that experience?",
-  }), false);
+  }), true);
 });
 
 test("sent or sending initial outreach is never replaced", () => {
@@ -61,7 +61,7 @@ test("kind-specific validator rejects follow-ups that restart the thread or use 
   assert.equal(outreachMessageNeedsRegeneration("followup", "Just following up on the note I sent.\n\nBrian"), true);
 });
 
-test("kind-specific initial validation still rejects the conversation CTA", () => {
+test("initial draft validation leaves CTA strategy to the editable prompt", () => {
   const body = safeBody.replace("Want me to send over what I noticed?", "Would you be open to a quick conversation about improving that experience?");
-  assert.equal(outreachMessageNeedsRegeneration("initial", body, "Homepage load", "Would you be open to a quick conversation about improving that experience?"), true);
+  assert.equal(outreachMessageNeedsRegeneration("initial", body, "Homepage load", "Would you be open to a quick conversation about improving that experience?"), false);
 });

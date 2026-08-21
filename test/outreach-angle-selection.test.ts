@@ -50,5 +50,5 @@ test("operator-selected finding bypasses automatic materiality and housekeeping 
 test("My Notes selection marker is persisted and decoded as an operator override", () => {
   const decoded = decodeOutreachPsychology(encodeOperatorNotesSelection("Lead with the unfinished kitchen page, not speed."));
   assert.equal(decoded?.selectionSource, "operator_notes");
-  assert.equal(decoded?.version, "outreach-angle-v4");
+  assert.equal(decoded?.version, "outreach-angle-v5");
 });
