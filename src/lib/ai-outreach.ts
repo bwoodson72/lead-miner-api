@@ -2,14 +2,11 @@ import { z } from "zod";
 import { getEnv } from "./env.js";
 import { fetchWithProviderBackoff } from "./provider-retry.js";
 import {
-  buildHardOutreachRules,
   containsDisallowedExistingSiteServiceOffer,
   containsProhibitedSubjectLanguage,
   containsProhibitedTouch1Ask,
   containsProspectFacingImplementationStack,
-  getOutreachOfferContext,
   OUTREACH_POLICY,
-  OUTREACH_VALIDATION_MESSAGES,
 } from "./outreach-policy.js";
 import {
   containsUnsupportedFormAbsenceClaim,
@@ -21,15 +18,6 @@ export {
   containsProspectFacingImplementationStack,
 } from "./outreach-policy.js";
 
-const PsychologicalLeverSchema = z.enum([
-  "loss_aversion",
-  "self_interest",
-  "competitive_choice",
-  "protect_existing_spend",
-  "trust",
-  "ease_of_action",
-]);
-
 const OutreachDraftSchema = z.object({
   subject: z.string().min(1).max(120),
   bodyText: z.string().min(1).max(2500),
@@ -40,7 +28,7 @@ const OutreachDraftSchema = z.object({
 });
 
 export type OutreachDraft = z.infer<typeof OutreachDraftSchema>;
-export const OUTREACH_PROMPT_VERSION = "outreach-draft-v19";
+export const OUTREACH_PROMPT_VERSION = "outreach-draft-v20";
 
 function schema() {
   return {
@@ -207,28 +195,8 @@ export function normalizeOutreachBody(value: string) {
   return value.trim();
 }
 
-function stripNeutralGreeting(value: string) {
-  return value.replace(/^\s*Hi,\s*(?:\r?\n\s*)+/i, "").trim();
-}
-
 export function containsGenericOpening(value: string) {
   return /^\s*(?:i hope\b|i (?:just )?wanted to (?:reach out|contact you)|i(?:'m| am) reaching out\b|i came across (?:your|the) (?:website|site)\b|i found (?:your|the) (?:website|site)\b|my name is\b)/i.test(value);
-}
-
-function wordCount(value: string) {
-  return value.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function ctaAppearsInBody(bodyText: string, cta: string) {
-  const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-  return normalize(bodyText).includes(normalize(cta));
-}
-
-function endsWithSenderFirstName(bodyText: string, senderName: string) {
-  const firstName = senderName.trim().split(/\s+/)[0];
-  if (!firstName) return true;
-  const lastLine = bodyText.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
-  return lastLine?.toLowerCase() === firstName.toLowerCase();
 }
 
 type PreviousDraft = {
@@ -264,46 +232,15 @@ export function draftTooSimilarToPrevious(draft: Pick<OutreachDraft, "bodyText" 
   return jaccard >= 0.82 || (sameOpening && sameCta);
 }
 
-function draftValidationIssues(draft: OutreachDraft, senderName: string, recentCtas: string[], previousDraft?: PreviousDraft | null) {
-  const issues: string[] = [];
-  if (!hasNeutralGreeting(draft.bodyText)) issues.push(`Start exactly with ${OUTREACH_POLICY.touch1.greeting} on its own line.`);
-  if (hasUnverifiedSalutation(draft.bodyText)) issues.push("Do not invent a recipient name, owner name, or team greeting.");
-  if (containsPlaceholderText(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove placeholder or fabricated identity text.");
-  if (containsGenericOpening(stripNeutralGreeting(draft.bodyText))) issues.push("Open with the specific observation, not generic cold-email filler.");
-  if (containsMinimizingRemediation(draft.bodyText)) issues.push("Do not prescribe or minimize a quick fix in Touch 1.");
-  if (containsConsultantJargon(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace consultant/business-analysis jargon with ordinary spoken English.");
-  if (containsArtificialOutreachLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Replace campaign/analyst language with words a person would actually use in an email.");
-  if (containsAuditDiagnosisLanguage(`${draft.bodyText}\n${draft.cta}`)) issues.push("Offer the observation or details, not a technical diagnosis of what may be causing or contributing to the issue.");
-  if (containsTechnicalAuditLanguage(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Remove technical audit and measurement terminology.");
-  if (containsProspectFacingPerformanceMeasurement(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push("Use rounded, human-readable elapsed time only. Remove milliseconds, benchmark-style percentages, or overly precise tool-like timing.");
-  if (containsProspectFacingImplementationStack(`${draft.subject}\n${draft.bodyText}\n${draft.cta}`)) issues.push(OUTREACH_VALIDATION_MESSAGES.implementationStack);
-  if (containsDisallowedExistingSiteServiceOffer(`${draft.bodyText}\n${draft.cta}`)) issues.push(OUTREACH_VALIDATION_MESSAGES.existingSiteWork);
-  if (ctaNeedsRegeneration(draft.cta)) issues.push(OUTREACH_VALIDATION_MESSAGES.cta);
-  if (!ctaAppearsInBody(draft.bodyText, draft.cta)) issues.push("The cta field must exactly match the question used in the email body.");
-  if (ctaTooSimilarToRecent(draft.cta, recentCtas)) issues.push("Rewrite the CTA so it does not reuse the same opening pattern as recent campaign emails.");
-  if (subjectNeedsRegeneration(draft.subject)) issues.push(OUTREACH_VALIDATION_MESSAGES.subject);
-  const words = wordCount(draft.bodyText);
-  if (words < OUTREACH_POLICY.touch1.validationMinWords || words > OUTREACH_POLICY.touch1.validationMaxWords) issues.push(OUTREACH_VALIDATION_MESSAGES.length);
-  if (!endsWithSenderFirstName(draft.bodyText, senderName)) issues.push("Sign off with the sender's first name on its own line.");
-  if (previousDraft && draftTooSimilarToPrevious(draft, previousDraft)) issues.push("This regeneration is too similar to the previous draft. Rebuild the email with a different opening, sentence structure, framing, and CTA wording while preserving the supported facts.");
-  return issues;
-}
-
+/**
+ * Stored-draft reuse only checks structural/factual hazards.
+ * Writing style belongs to the editable outreach prompt, not deterministic code.
+ */
 export function outreachDraftNeedsRegeneration(bodyText: string, subject = "", cta = "") {
-  return !hasNeutralGreeting(bodyText)
-    || hasUnverifiedSalutation(bodyText)
-    || containsPlaceholderText(`${subject}\n${bodyText}`)
-    || containsGenericOpening(stripNeutralGreeting(normalizeOutreachBody(bodyText)))
-    || containsMinimizingRemediation(bodyText)
-    || containsConsultantJargon(bodyText)
-    || containsArtificialOutreachLanguage(`${bodyText}\n${cta}`)
-    || containsAuditDiagnosisLanguage(`${bodyText}\n${cta}`)
-    || containsTechnicalAuditLanguage(`${subject}\n${bodyText}\n${cta}`)
-    || containsProspectFacingPerformanceMeasurement(`${subject}\n${bodyText}\n${cta}`)
-    || containsProspectFacingImplementationStack(`${subject}\n${bodyText}\n${cta}`)
-    || containsDisallowedExistingSiteServiceOffer(`${bodyText}\n${cta}`)
-    || (subject ? subjectNeedsRegeneration(subject) : false)
-    || (cta ? ctaNeedsRegeneration(cta) : false);
+  const combined = `${subject}\n${bodyText}\n${cta}`;
+  return !bodyText.trim()
+    || containsPlaceholderText(combined)
+    || hasUnverifiedSalutation(bodyText);
 }
 
 type LegacyProblem = {
@@ -326,22 +263,25 @@ type SelectedFinding = {
 
 type OutreachStrategy = {
   observation: string;
-  ownerStake: string;
-  buyerMoment: string | null;
-  psychologicalLever: z.infer<typeof PsychologicalLeverSchema>;
 };
+
+const IMMUTABLE_EVIDENCE_RULES = [
+  "Use only factual claims supported by selectedFinding or operatorContext.",
+  "Do not invent a recipient name, business fact, website observation, metric, customer behavior, loss, result, urgency, or business plan.",
+  "If operatorContext conflicts with research for prospect-facing outreach, operatorContext is authoritative.",
+  "Do not expose private workflow metadata such as Lead Miner, AI research, qualification logic, confidence scores, significance labels, evidence-source metadata, or internal selection reasoning.",
+  "Do not change or discuss the stored qualification decision.",
+  "The editable campaign instructions control voice, structure, CTA style, length, subject style, and sales approach unless they conflict with these evidence rules.",
+  "Return the required structured draft.",
+].join(" ");
 
 async function requestDraft(
   model: string,
   systemInstructions: string,
   packet: Record<string, unknown>,
-  rewrite?: { previousDraft: OutreachDraft; issues: string[] },
 ) {
   const env = getEnv();
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
-  const userText = rewrite
-    ? `Rewrite the email from scratch. The previous attempt failed the checks below. Fix the problems without copying its wording or turning the checks into visible prose.\n\nProblems:\n- ${rewrite.issues.join("\n- ")}\n\nPrevious attempt:\n${JSON.stringify(rewrite.previousDraft)}\n\nPrivate strategy notes:\n${JSON.stringify(packet)}`
-    : `Write the first cold email from these private strategy notes. Do not copy the note wording; write the email from scratch:\n${JSON.stringify(packet)}`;
   const response = await fetchWithProviderBackoff("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -349,7 +289,13 @@ async function requestDraft(
       model,
       input: [
         { role: "system", content: [{ type: "input_text", text: systemInstructions }] },
-        { role: "user", content: [{ type: "input_text", text: userText }] },
+        {
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: `Write the initial outreach email from this evidence and context. The selected finding and My Notes are private source material, not copy to repeat mechanically:\n${JSON.stringify(packet)}`,
+          }],
+        },
       ],
       text: { format: { type: "json_schema", name: "outreach_draft", strict: true, schema: schema() } },
     }),
@@ -418,84 +364,56 @@ export async function generateOutreachDraft(input: {
   }
   if (!selectedFinding) throw new Error("No evidence-backed outreach finding meets the configured safety threshold");
   if (selectedFinding.confidence < minFindingConfidence) throw new Error("Selected outreach finding is below the configured confidence threshold");
+
   const findingText = `${selectedFinding.title} ${selectedFinding.evidence} ${selectedFinding.assetCapability}`;
   if (containsUnsupportedFormAbsenceClaim(findingText)) throw new Error("Selected outreach finding contains an unsupported form-absence claim");
   if (containsUnverifiedVisitorVisibility(findingText)) throw new Error("Selected outreach finding still requires visitor-facing verification");
 
   const senderName = input.senderName?.trim() || "Brian Woodson";
   const senderEmail = input.senderEmail?.trim() || "leads@brianwoodson.dev";
-  const senderFirstName = senderName.split(/\s+/)[0] || senderName;
-  const strategy: OutreachStrategy = input.strategy ?? {
-    observation: sanitizeProspectFacingEvidence(input.primaryOutreachAngle ?? null) ?? sanitizeProspectFacingEvidence(selectedFinding.title) ?? selectedFinding.title,
-    ownerStake: sanitizeProspectFacingEvidence(selectedFinding.assetCapability) ?? "The issue may make it harder for someone to understand the business or take the next step.",
-    buyerMoment: null,
-    psychologicalLever: "self_interest",
-  };
-  const writerStrategy: OutreachStrategy = {
-    observation: sanitizePerformanceMeasurements(strategy.observation) ?? strategy.observation,
-    ownerStake: sanitizePerformanceMeasurements(strategy.ownerStake) ?? strategy.ownerStake,
-    buyerMoment: sanitizePerformanceMeasurements(strategy.buyerMoment),
-    psychologicalLever: strategy.psychologicalLever,
-  };
-  const recentCtas = (input.recentCtas ?? []).slice(0, 20);
+  const observation = input.strategy?.observation
+    ?? input.primaryOutreachAngle
+    ?? selectedFinding.title;
   const operatorNotes = input.operatorNotes?.trim() || null;
+
   const packet = {
-    policyVersion: OUTREACH_POLICY.version,
     businessName: isPlaceholderBusinessName(input.businessName) ? null : input.businessName,
     domain: input.domain,
     businessType: input.keyword,
-    qualificationDecision: input.qualificationDecision ?? null,
-    offerContext: getOutreachOfferContext(),
-    strategy: writerStrategy,
+    selectedFinding: {
+      id: selectedFinding.id,
+      category: selectedFinding.category,
+      title: selectedFinding.title,
+      evidence: selectedFinding.evidence,
+      businessContext: selectedFinding.assetCapability,
+    },
+    selectedObservation: observation,
     operatorContext: operatorNotes ? {
       source: "human My Notes",
       observations: operatorNotes,
-      usage: "First-class private message context supplied by Brian. It may contribute at most one relevant firsthand observation alongside the selected research finding. It does not change qualification, priority, or the stored outreach angle. Do not quote it mechanically or expose it as notes.",
     } : null,
-    regeneration: input.previousDraft ? {
-      previousDraft: input.previousDraft,
-      requirement: "Create a materially different Touch 1. Do not lightly paraphrase this draft. Change the opening construction, sentence structure, framing/body sequence, and CTA wording while preserving supported facts and the same low-friction objective.",
-    } : null,
-    recentCtas,
+    previousDraft: input.previousDraft ?? null,
+    recentCampaignCtas: (input.recentCtas ?? []).slice(0, 20),
     sender: {
       name: senderName,
-      firstName: senderFirstName,
-      role: "web developer",
-      work: OUTREACH_POLICY.offer.senderWork,
+      firstName: senderName.split(/\s+/)[0] || senderName,
       email: senderEmail,
     },
   };
 
-  const strategyGuidance = editableInstructions.trim()
-    ? `Campaign preferences follow. They may guide tone, emphasis, and wording but must not override the factual strategy, operatorContext, or non-editable safety rules:\n${editableInstructions.trim()}\n\n`
-    : "";
-  const systemInstructions = `${strategyGuidance}Non-editable Touch 1 writing and safety rules (${OUTREACH_POLICY.version}):\n${buildHardOutreachRules()}`;
+  const campaignInstructions = editableInstructions.trim()
+    || "Write a short, specific first cold email in a natural human voice using the supplied evidence.";
+  const systemInstructions = `${campaignInstructions}\n\nIMMUTABLE EVIDENCE RULES:\n${IMMUTABLE_EVIDENCE_RULES}`;
 
-  const first = await requestDraft(model, systemInstructions, packet);
-  first.draft.angle = strategy.observation;
-  let issues = draftValidationIssues(first.draft, senderName, recentCtas, input.previousDraft);
-  if (!issues.length) {
-    return {
-      draft: first.draft,
-      model: first.model,
-      attempts: 1,
-      inputTokens: first.inputTokens,
-      cachedTokens: first.cachedTokens,
-      outputTokens: first.outputTokens,
-    };
-  }
-
-  const second = await requestDraft(model, systemInstructions, packet, { previousDraft: first.draft, issues });
-  second.draft.angle = strategy.observation;
-  issues = draftValidationIssues(second.draft, senderName, recentCtas, input.previousDraft);
-  if (issues.length) throw new Error(`OpenAI outreach draft failed quality checks after rewrite: ${issues.join(" ")}`);
+  const generated = await requestDraft(model, systemInstructions, packet);
+  generated.draft.angle = observation;
 
   return {
-    draft: second.draft,
-    model: second.model,
-    attempts: 2,
-    inputTokens: first.inputTokens + second.inputTokens,
-    cachedTokens: first.cachedTokens + second.cachedTokens,
-    outputTokens: first.outputTokens + second.outputTokens,
+    draft: generated.draft,
+    model: generated.model,
+    attempts: 1,
+    inputTokens: generated.inputTokens,
+    cachedTokens: generated.cachedTokens,
+    outputTokens: generated.outputTokens,
   };
 }
